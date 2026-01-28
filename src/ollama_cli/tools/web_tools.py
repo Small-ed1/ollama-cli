@@ -9,14 +9,15 @@ import json
 import hashlib
 import time
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlparse
 
 import requests
-import sys
 
-from ..text_extract import html_to_text, clean_ws
 from ..config import DEFAULT_SEARXNG_URL, DEFAULT_WEB_MAX_CHARS, DEFAULT_WEB_SEARCH_COUNT
+from ..errors import ToolTimeoutError
+from ..text_extract import html_to_text, clean_ws
 from .core import WebToolError, SearchResult
+
 
 
 class WebTools:
@@ -61,11 +62,10 @@ class WebTools:
     
     def _cache_key(self, endpoint: str, params: Dict[str, Any]) -> str:
         """Generate cache key for request."""
-        import hashlib
         key = f"{endpoint}:{json.dumps(params, sort_keys=True)}"
         return hashlib.md5(key.encode()).hexdigest()
     
-    def _get_cached(self, cache_key: str) -> Any | None:
+    def _get_cached(self, cache_key: str) -> Optional[Any]:
         """Get cached response if valid."""
         if cache_key in self._cache:
             timestamp, data = self._cache[cache_key]
@@ -139,9 +139,10 @@ class WebTools:
             self._set_cached(cache_key, {"results": [r.__dict__ for r in results]})
             return results
             
+        except requests.Timeout as e:
+            raise ToolTimeoutError(f"Web search timed out: {e}") from e
         except requests.RequestException as e:
-            print(f"Warning: Web search failed ({e}); continuing with empty results.", file=sys.stderr)
-            return []
+            raise WebToolError(f"Web search failed: {e}") from e
         except (KeyError, ValueError) as e:
             raise WebToolError(f"Invalid search response format: {e}") from e
     
@@ -206,6 +207,8 @@ class WebTools:
                 "extraction_mode": "text",
             }
             
+        except requests.Timeout as e:
+            raise ToolTimeoutError(f"Web open timed out: {e}") from e
         except requests.RequestException as e:
             raise WebToolError(f"Failed to fetch URL {url}: {e}") from e
 
@@ -214,23 +217,17 @@ class WebTools:
         return clean_ws(s)
 
 
-# Singleton instance for tool functions
-_web_tools_instance = None
-
-
-def _get_web_tools() -> WebTools:
-    """Get singleton WebTools instance."""
-    global _web_tools_instance
-    if _web_tools_instance is None:
-        _web_tools_instance = WebTools()
-    return _web_tools_instance
-
-
-def tool_web_search(query: str, count: int = DEFAULT_WEB_SEARCH_COUNT, 
-                   recency_days: int = 365, source: str = "auto") -> str:
+def tool_web_search(
+    web_tools: WebTools,
+    query: str,
+    count: int = DEFAULT_WEB_SEARCH_COUNT,
+    recency_days: int = 365,
+    source: str = "auto",
+) -> str:
     """Tool wrapper for web search.
     
     Args:
+        web_tools: WebTools instance
         query: Search query
         count: Number of results (default 8, max 20)
         recency_days: Filter to recent days (default 365, 0 = no filter)
@@ -239,24 +236,29 @@ def tool_web_search(query: str, count: int = DEFAULT_WEB_SEARCH_COUNT,
     Returns:
         JSON string with search results
     """
-    try:
-        web_tools = _get_web_tools()
-        results = web_tools.search(query, count, recency_days, source)
-        
-        return json.dumps({
+    results = web_tools.search(query, count, recency_days, source)
+
+    return json.dumps(
+        {
             "query": query,
             "results": [result.__dict__ for result in results],
             "count": len(results),
-        }, indent=2, ensure_ascii=False)
-        
-    except Exception as e:
-        return json.dumps({"error": f"Web search failed: {e}"}, ensure_ascii=False)
+        },
+        indent=2,
+        ensure_ascii=False,
+    )
 
 
-def tool_web_open(url: str, mode: str = "auto", max_chars: int = DEFAULT_WEB_MAX_CHARS) -> str:
+def tool_web_open(
+    web_tools: WebTools,
+    url: str,
+    mode: str = "auto",
+    max_chars: int = DEFAULT_WEB_MAX_CHARS,
+) -> str:
     """Tool wrapper for URL content extraction.
     
     Args:
+        web_tools: WebTools instance
         url: URL to fetch
         mode: Extraction mode ('auto', 'text', 'html')
         max_chars: Maximum characters to extract (default 12000)
@@ -264,11 +266,5 @@ def tool_web_open(url: str, mode: str = "auto", max_chars: int = DEFAULT_WEB_MAX
     Returns:
         JSON string with extracted content
     """
-    try:
-        web_tools = _get_web_tools()
-        result = web_tools.open_url(url, mode, max_chars)
-        
-        return json.dumps(result, indent=2, ensure_ascii=False)
-        
-    except Exception as e:
-        return json.dumps({"error": f"Web open failed: {e}"}, ensure_ascii=False)
+    result = web_tools.open_url(url, mode, max_chars)
+    return json.dumps(result, indent=2, ensure_ascii=False)

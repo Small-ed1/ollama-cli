@@ -11,7 +11,7 @@ import sys
 from typing import Any, Dict, List, Optional
 
 from .client import OllamaClient
-from .config import DEFAULT_BASE_URL
+from .config import DEFAULT_BASE_URL, load_config_from_env, resolve_config_file
 
 
 def _print_advanced_help() -> None:
@@ -196,7 +196,7 @@ def save_configuration(config: Dict[str, Any]):
     """
     try:
         from .config import DEFAULT_CONFIG_FILE
-        config_file = DEFAULT_CONFIG_FILE
+        config_file = resolve_config_file(DEFAULT_CONFIG_FILE)
         config_dir = os.path.dirname(config_file)
         
         # Ensure config directory exists
@@ -218,7 +218,8 @@ def load_configuration() -> Optional[Dict[str, Any]]:
     """
     try:
         from .config import DEFAULT_CONFIG_FILE
-        with open(DEFAULT_CONFIG_FILE, 'r', encoding='utf-8') as f:
+        config_file = resolve_config_file(DEFAULT_CONFIG_FILE)
+        with open(config_file, 'r', encoding='utf-8') as f:
             return json.load(f)
     except FileNotFoundError:
         return None
@@ -284,7 +285,9 @@ def config_to_args(config: Dict[str, Any]) -> argparse.Namespace:
     args.unsafe_read = config.get("unsafe_read", False)
     
     # Other required fields for cmd_chat
-    args.host = os.getenv("OLLAMA_BASE_URL", DEFAULT_BASE_URL)
+    app_config = load_config_from_env()
+    args.host = app_config.client.base_url or DEFAULT_BASE_URL
+    args._app_config = app_config
     args.timeout = 60
     args.api_key = None
     
@@ -314,8 +317,13 @@ def start_interactive():
     from .cli import cmd_chat, cmd_gen, cmd_list, cmd_pull
     from .research_pipeline import run_deep_research
 
-    base_url = os.getenv("OLLAMA_BASE_URL", DEFAULT_BASE_URL)
-    client = OllamaClient(base_url=base_url)
+    app_config = load_config_from_env()
+    base_url = app_config.client.base_url or DEFAULT_BASE_URL
+    client = OllamaClient(
+        base_url=base_url,
+        timeout=app_config.client.timeout_s,
+        api_key=app_config.client.api_key,
+    )
 
     config = load_configuration() or {}
     current_model = config.get("model")
@@ -520,7 +528,7 @@ def start_interactive():
                     query=query,
                     preset_name=preset,
                     seed_urls=None,
-                    searxng_url=os.getenv("SEARXNG_URL"),
+                    searxng_url=app_config.tools.searxng_url,
                 )
                 print("\n" + out + "\n")
             except Exception as e:
@@ -536,7 +544,7 @@ def start_interactive():
                         query=query,
                         preset_name=preset,
                         seed_urls=seed_urls,
-                        searxng_url=os.getenv("SEARXNG_URL"),
+                        searxng_url=app_config.tools.searxng_url,
                     )
                     print("\n" + out + "\n")
                 except Exception as e2:
@@ -569,7 +577,7 @@ def start_interactive():
                     query=line,
                     preset_name=preset,
                     seed_urls=None,
-                    searxng_url=os.getenv("SEARXNG_URL"),
+                    searxng_url=app_config.tools.searxng_url,
                 )
                 print("\n" + out + "\n")
             except Exception as e:

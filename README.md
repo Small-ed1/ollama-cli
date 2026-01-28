@@ -14,16 +14,20 @@ Key features:
 
 ## Install
 
+```bash
+pip install ollama-cli
+
+# Optional extras
+pip install "ollama-cli[web]"   # trafilatura + beautifulsoup4 + readability-lxml
+pip install "ollama-cli[kiwix]"
+pip install "ollama-cli[dev]"
+```
+
 From a local checkout:
 
 ```bash
-pip install -e .
-```
-
-From GitHub:
-
-```bash
-pip install "git+https://github.com/Small-ed1/ollama-cli.git"
+pip install .
+pip install -e ".[dev]"
 ```
 
 ## Quick start
@@ -72,6 +76,33 @@ Interactive configuration:
 - Saved config file: `~/.ollama_cli_config.json`
 - Reset saved config: `ollama-cli --reset-config`
 
+## Public API (Supported Imports)
+
+- `ollama_cli.client.OllamaClient`
+- `ollama_cli.tools.ToolRegistry`
+- `ollama_cli.runtime.ToolRuntime`
+- `ollama_cli.loop.run_tool_calling_loop` and `ollama_cli.loop.run_tool_calling_loop_sync`
+- `ollama_cli.loop.ToolCall` and `ollama_cli.loop.ToolResult` (tool call contract)
+
+All other modules are internal and may change without notice.
+
+## Tool Call Contract
+
+The stable tool contract is modeled as:
+
+- `ToolCall(id, name, arguments)`
+- `ToolResult(ok, content, error, meta)`
+
+Tool results are serialized with `ToolResult.to_json()` to guarantee a stable JSON shape across versions.
+The tool runtime is async-first; use `run_tool_calling_loop_sync` when you need a sync adapter.
+
+## CogniHub Adapter
+
+Use the optional adapter helpers to integrate with CogniHub:
+
+- `ollama_cli.adapters.cognihub.to_tool_specs(registry) -> list[dict]`
+- `ollama_cli.adapters.cognihub.from_ollama_tool_calls(resp) -> list[ToolCall]`
+
 ## Tool calling notes
 
 Enable tools:
@@ -90,10 +121,10 @@ File access safety:
 ## Development
 
 See `AGENTS.md` for development commands and codebase conventions.
+See `CHANGELOG.md` for release notes and `docs/DEPRECATION_POLICY.md` for deprecation guidance.
 
 ```bash
-pip install -e .
-pip install pytest pytest-asyncio mypy
+pip install -e ".[dev]"
 
 pytest tests/
 python -m mypy src/ollama_cli
@@ -126,7 +157,7 @@ If you want more, I can add a sequence diagram or example log, but text flow suf
   - If your Ollama instance does not require an API key, you can omit this header.
 
 - Timeouts or slow responses
-  - Increase client timeout by setting OLLAMA_TIMEOUT env var or config.DEFAULT_TIMEOUT.
+  - Increase client timeout by setting `OLLAMA_TIMEOUT` or passing `ClientConfig(timeout_s=...)`.
   - Check network latency or server load.
 
 - JSON parsing errors from API

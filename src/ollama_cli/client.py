@@ -5,33 +5,29 @@ including model listing, pulling, generation, and chat functionality.
 """
 
 import json
-import os
-from typing import Any, Dict, Generator, Iterator, Optional, List
+from typing import Any, Dict, Iterator, Optional, List
 
 import requests
 
-
-class OllamaAPIError(RuntimeError):
-    """Raised when Ollama API requests fail."""
-    pass
+from .errors import OllamaAPIError, OllamaNetworkError, OllamaTimeoutError
 
 
 class OllamaClient:
     """Client for Ollama API interactions."""
     
-    def __init__(self, base_url: str, timeout: int = 60):
+    def __init__(self, base_url: str, timeout: int = 60, api_key: Optional[str] = None):
         """Initialize Ollama client.
         
         Args:
             base_url: Base URL for Ollama API
             timeout: Request timeout in seconds
+            api_key: Optional API key for authorization
         """
         # Ollama API lives under /api
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         
         # Set up headers with optional API key
-        api_key = os.getenv("OLLAMA_API_KEY")
         self.headers = {"Content-Type": "application/json"}
         if api_key:
             self.headers["Authorization"] = f"Bearer {api_key}"
@@ -72,8 +68,10 @@ class OllamaClient:
                 timeout=self.timeout,
             )
             r.raise_for_status()
+        except requests.Timeout as e:
+            raise OllamaTimeoutError(f"Ollama request timed out: {e}") from e
         except requests.RequestException as e:
-            raise OllamaAPIError(str(e)) from e
+            raise OllamaNetworkError(f"Ollama request failed: {e}") from e
         
         for line in r.iter_lines(decode_unicode=True):
             if line:
@@ -104,8 +102,10 @@ class OllamaClient:
             )
             r.raise_for_status()
             return r.json()
+        except requests.Timeout as e:
+            raise OllamaTimeoutError(f"Ollama request timed out: {e}") from e
         except requests.RequestException as e:
-            raise OllamaAPIError(str(e)) from e
+            raise OllamaNetworkError(f"Ollama request failed: {e}") from e
     
     def tags(self) -> Dict[str, Any]:
         """List available local models.
@@ -117,8 +117,10 @@ class OllamaClient:
             r = requests.get(self._url("tags"), headers=self.headers, timeout=self.timeout)
             r.raise_for_status()
             return r.json()
+        except requests.Timeout as e:
+            raise OllamaTimeoutError(f"Ollama request timed out: {e}") from e
         except requests.RequestException as e:
-            raise OllamaAPIError(str(e)) from e
+            raise OllamaNetworkError(f"Ollama request failed: {e}") from e
     
     def pull(self, model: str, insecure: bool = False) -> Iterator[Dict[str, Any]]:
         """Pull a model from Ollama registry.

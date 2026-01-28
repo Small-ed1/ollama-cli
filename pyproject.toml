@@ -11,5 +11,16 @@ requires-python = ">=3.14"
 dependencies = ["requests"]
 authors = [{name = "Author", email = "author@example.com"}]
 
+[project.optional-dependencies]
+web = ["trafilatura", "beautifulsoup4", "readability-lxml"]
+kiwix = []
+dev = ["pytest", "pytest-asyncio", "mypy", "build"]
+
 [project.scripts]
 ollama-cli = "ollama_cli.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

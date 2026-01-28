@@ -1,29 +1,13 @@
 """Core tool system with registry and lazy loading.
 
-This module provides the foundation for the tool system including exception
-hierarchy, shared data structures, tool specifications, and lazy function
-loading to avoid eager imports of optional dependencies.
+This module provides tool data structures and specifications.
 """
 
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
-
-# Exception hierarchy
-class ToolError(RuntimeError):
-    """Base exception for all tool-related errors."""
-    pass
-
-
-class WebToolError(ToolError):
-    """Exception raised when web-based tools fail."""
-    pass
-
-
-class KiwixToolError(ToolError):
-    """Exception raised when Kiwix-based tools fail."""
-    pass
+from ..errors import ToolError, WebToolError, KiwixToolError
 
 
 @dataclass
@@ -206,36 +190,11 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     ),
 ]
 
-# Lazy tool function loading
-_TOOL_FUNCS: Optional[Dict[str, Any]] = None
-
-
-def get_tool_functions() -> Dict[str, Any]:
-    """Lazy tool function loading - only imports when called.
-    
-    This function delays importing tool implementations until they're actually
-    needed, avoiding import-time failures when optional dependencies are missing.
-    
-    Returns:
-        Dictionary mapping tool names to their callable functions
-    """
-    global _TOOL_FUNCS
-    if _TOOL_FUNCS is None:
-        # Import here to avoid eager loading of optional dependencies
-        from .system_tools import tool_get_time, tool_read_file
-        from .web_tools import tool_web_search, tool_web_open
-        from .kiwix_tools import (
-            tool_kiwix_search, tool_kiwix_open, tool_kiwix_suggest, tool_kiwix_list_zims
-        )
-        
-        _TOOL_FUNCS = {
-            "get_time": tool_get_time,
-            "read_file": tool_read_file,
-            "web_search": tool_web_search,
-            "web_open": tool_web_open,
-            "kiwix_search": tool_kiwix_search,
-            "kiwix_open": tool_kiwix_open,
-            "kiwix_suggest": tool_kiwix_suggest,
-            "kiwix_list_zims": tool_kiwix_list_zims,
-        }
-    return _TOOL_FUNCS
+__all__ = [
+    "ToolError",
+    "WebToolError",
+    "KiwixToolError",
+    "SearchResult",
+    "TOOL_SPECS",
+    "_tool_schema",
+]

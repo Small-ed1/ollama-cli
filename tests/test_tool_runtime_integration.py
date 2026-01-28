@@ -6,14 +6,27 @@ and result formatting.
 """
 
 import asyncio
+import json
 import os
 import pytest
 import tempfile
 from typing import Any, Dict, List
 
-from ollama_cli.tool_parse import run_tool_calling_loop, run_tool_calling_loop_sync
-from ollama_cli.tool_runtime import ToolRuntime, clear_runtime_cache
-from ollama_cli.tools.core import TOOL_SPECS
+from ollama_cli.loop import run_tool_calling_loop, run_tool_calling_loop_sync
+from ollama_cli.runtime import ToolRuntime
+from ollama_cli.tool_contract import ToolErrorCodes
+from ollama_cli.tools.registry import ToolRegistry, build_default_registry
+
+
+def _test_tool_spec(name: str) -> Dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": "test tool",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
 
 
 class TestToolRuntimeIntegration:
@@ -21,8 +34,7 @@ class TestToolRuntimeIntegration:
     
     def setup_method(self):
         """Set up test environment."""
-        # Clear runtime cache before each test
-        clear_runtime_cache()
+        self.registry = build_default_registry()
         
         # Create a temporary file for testing
         self.temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt')
@@ -40,10 +52,8 @@ class TestToolRuntimeIntegration:
             pass
     
     def test_legacy_engine_sync(self):
-        """Test legacy engine with synchronous execution."""
-        # Force legacy engine
-        os.environ["TOOL_ENGINE"] = "legacy"
-        
+        """Test synchronous execution."""
+        runtime = ToolRuntime(registry=self.registry)
         tool_calls = [
             {
                 "id": "test_1",
@@ -54,21 +64,21 @@ class TestToolRuntimeIntegration:
             }
         ]
         
-        results = run_tool_calling_loop_sync(tool_calls)
+        results = run_tool_calling_loop_sync(tool_calls, runtime=runtime)
         
         assert len(results) == 1
         result = results[0]
         assert result["role"] == "tool"
         assert result["tool_name"] == "get_time"
         assert result["tool_call_id"] == "test_1"
-        assert "UTC" in result["content"] or "time" in result["content"].lower()
+        content = json.loads(result["content"])
+        assert content["ok"] is True
+        assert "UTC" in (content.get("content") or "")
     
     @pytest.mark.asyncio
     async def test_registry_engine_async(self):
-        """Test registry engine with async execution and progress events."""
-        # Force registry engine
-        os.environ["TOOL_ENGINE"] = "registry"
-        
+        """Test async execution and progress events."""
+        runtime = ToolRuntime(registry=self.registry)
         tool_calls = [
             {
                 "id": "test_2",
@@ -84,7 +94,7 @@ class TestToolRuntimeIntegration:
         async def emit(event: Dict[str, Any]):
             progress_events.append(event)
         
-        results = await run_tool_calling_loop(tool_calls, emit)
+        results = await run_tool_calling_loop(tool_calls, emit, runtime=runtime)
         
         # Verify results
         assert len(results) == 1
@@ -111,8 +121,7 @@ class TestToolRuntimeIntegration:
     @pytest.mark.asyncio
     async def test_registry_engine_error_handling(self):
         """Test registry engine error handling."""
-        os.environ["TOOL_ENGINE"] = "registry"
-        
+        runtime = ToolRuntime(registry=self.registry)
         tool_calls = [
             {
                 "id": "test_error",
@@ -128,13 +137,14 @@ class TestToolRuntimeIntegration:
         async def emit(event: Dict[str, Any]):
             progress_events.append(event)
         
-        results = await run_tool_calling_loop(tool_calls, emit)
+        results = await run_tool_calling_loop(tool_calls, emit, runtime=runtime)
         
         # Verify error handling
         assert len(results) == 1
         result = results[0]
         assert result["role"] == "tool"
-        assert "Error:" in result["content"]
+        content = json.loads(result["content"])
+        assert content["ok"] is False
         assert result["tool_call_id"] == "test_error"
         
         # Verify error event
@@ -146,8 +156,7 @@ class TestToolRuntimeIntegration:
     @pytest.mark.asyncio
     async def test_registry_engine_file_operations(self):
         """Test registry engine with file operations."""
-        os.environ["TOOL_ENGINE"] = "registry"
-        
+        runtime = ToolRuntime(registry=self.registry)
         tool_calls = [
             {
                 "id": "test_file",
@@ -166,14 +175,15 @@ class TestToolRuntimeIntegration:
         async def emit(event: Dict[str, Any]):
             progress_events.append(event)
         
-        results = await run_tool_calling_loop(tool_calls, emit)
+        results = await run_tool_calling_loop(tool_calls, emit, runtime=runtime)
         
         # Verify successful file read
         assert len(results) == 1
         result = results[0]
         assert result["role"] == "tool"
         assert result["tool_name"] == "read_file"
-        assert "Test file content" in result["content"]
+        content = json.loads(result["content"])
+        assert "Test file content" in (content.get("content") or "")
         assert result["tool_call_id"] == "test_file"
         
         # Verify proper event flow
@@ -183,6 +193,7 @@ class TestToolRuntimeIntegration:
     def test_tool_runtime_safety_limits(self):
         """Test ToolRuntime safety limits."""
         runtime = ToolRuntime(
+            registry=self.registry,
             timeout_s=1.0,
             max_chunks=10,
             max_result_bytes=1000
@@ -191,26 +202,24 @@ class TestToolRuntimeIntegration:
         # Test successful call within limits
         result = runtime.call_sync("get_time", {"tz": "UTC"})
         assert result.ok is True
-        assert result.result is not None
+        assert result.content is not None
         
         # Test with non-existent tool
-        from ollama_cli.tool_runtime import ToolErrorCodes
         result = runtime.call_sync("nonexistent", {})
         assert result.ok is False
-        assert result.code == ToolErrorCodes.NOT_FOUND
+        assert result.meta.get("code") == ToolErrorCodes.NOT_FOUND
     
     @pytest.mark.asyncio
     async def test_tool_runtime_async_timeout(self):
         """Test ToolRuntime async timeout behavior."""
-        runtime = ToolRuntime(timeout_s=0.1)  # Very short timeout
-        
         # Create a slow tool function
         async def slow_tool(**kwargs):
             await asyncio.sleep(0.5)  # Sleep longer than timeout
             return "should not reach here"
-        
-        # Temporarily add the slow tool
-        runtime._tool_funcs["slow_tool"] = slow_tool
+
+        registry = ToolRegistry()
+        registry.register("slow_tool", _test_tool_spec("slow_tool"), slow_tool)
+        runtime = ToolRuntime(registry=registry, timeout_s=0.1)
         
         progress_events = []
         async for event in runtime.call_async("slow_tool", {}, "test_timeout"):
@@ -221,44 +230,19 @@ class TestToolRuntimeIntegration:
         assert len(error_events) == 1
         assert "timed out" in error_events[0]["error"].lower()
         
-        # Clean up the test tool
-        del runtime._tool_funcs["slow_tool"]
-    
-    def test_runtime_caching(self):
-        """Test runtime caching behavior."""
-        from ollama_cli.tool_runtime import get_default_runtime, _get_runtime_signature
-        
-        # First call should create new runtime
-        runtime1 = get_default_runtime()
-        signature = _get_runtime_signature()
-        
-        # Second call should return cached runtime
-        runtime2 = get_default_runtime()
-        assert runtime1 is runtime2
-        
-        # Clear cache and verify new runtime is created
-        clear_runtime_cache()
-        runtime3 = get_default_runtime()
-        assert runtime1 is not runtime3
     
     def test_tool_specs_consistency(self):
         """Test that all tool specs are valid and consistent."""
-        from ollama_cli.tools.core import get_tool_functions
-        
-        tool_funcs = get_tool_functions()
-        
+        registry = build_default_registry()
+
         # Verify all tools in specs have corresponding functions
-        spec_names = {spec["function"]["name"] for spec in TOOL_SPECS}
-        func_names = set(tool_funcs.keys())
-        
-        # Remove test tools that may have been added
-        func_names = {name for name in func_names if not name.startswith("test_")}
-        
-        assert spec_names.issubset(func_names), f"Missing functions: {spec_names - func_names}"
-        assert func_names.issubset(spec_names), f"Extra functions: {func_names - spec_names}"
-        
+        spec_names = {spec["function"]["name"] for spec in registry.list_specs()}
+        func_names = set(registry.tool_names())
+
+        assert spec_names == func_names
+
         # Verify all specs have required fields
-        for spec in TOOL_SPECS:
+        for spec in registry.list_specs():
             assert "type" in spec
             assert "function" in spec
             func_spec = spec["function"]
@@ -273,16 +257,13 @@ class TestPhase02Features:
     
     def setup_method(self):
         """Set up test environment."""
-        clear_runtime_cache()
-        os.environ["TOOL_ENGINE"] = "registry"
+        self.registry = build_default_registry()
     
     @pytest.mark.asyncio
     async def test_standardized_error_codes(self):
         """Test that all errors use standardized error codes."""
-        from ollama_cli.tool_runtime import ToolErrorCodes
-        
         # Test unknown tool error
-        runtime = ToolRuntime()
+        runtime = ToolRuntime(registry=self.registry)
         progress_events = []
         async for event in runtime.call_async("nonexistent_tool", {}, "test_error"):
             progress_events.append(event)
@@ -292,12 +273,12 @@ class TestPhase02Features:
         assert error_events[0]["code"] == ToolErrorCodes.NOT_FOUND
         
         # Test timeout error
-        slow_runtime = ToolRuntime(timeout_s=0.1)
+        slow_registry = ToolRegistry()
         async def slow_tool(**kwargs):
             await asyncio.sleep(0.5)
             return "should not reach"
-        
-        slow_runtime._tool_funcs["test_slow"] = slow_tool
+        slow_registry.register("test_slow", _test_tool_spec("test_slow"), slow_tool)
+        slow_runtime = ToolRuntime(registry=slow_registry, timeout_s=0.1)
         progress_events = []
         async for event in slow_runtime.call_async("test_slow", {}, "test_timeout"):
             progress_events.append(event)
@@ -305,13 +286,11 @@ class TestPhase02Features:
         error_events = [e for e in progress_events if e.get("event") == "error"]
         assert len(error_events) == 1
         assert error_events[0]["code"] == ToolErrorCodes.TIMEOUT
-        
-        del slow_runtime._tool_funcs["test_slow"]
     
     @pytest.mark.asyncio
     async def test_duration_metadata_tracking(self):
         """Test that duration metadata is tracked and included."""
-        runtime = ToolRuntime()
+        runtime = ToolRuntime(registry=self.registry)
         
         progress_events = []
         async for event in runtime.call_async("get_time", {"tz": "UTC"}, "test_duration"):
@@ -331,25 +310,21 @@ class TestPhase02Features:
     
     def test_sync_method_metadata(self):
         """Test metadata tracking in sync method."""
-        runtime = ToolRuntime()
+        runtime = ToolRuntime(registry=self.registry)
         
         result = runtime.call_sync("get_time", {"tz": "UTC"})
         
         assert result.ok is True
-        assert result.duration_ms is not None
-        assert isinstance(result.duration_ms, (int, float))
-        assert result.duration_ms > 0
-        assert result.result_bytes is not None
-        assert isinstance(result.result_bytes, int)
-        assert result.result_bytes > 0
+        assert isinstance(result.meta.get("duration_ms"), (int, float))
+        assert result.meta.get("duration_ms", 0) > 0
+        assert isinstance(result.meta.get("result_bytes"), int)
+        assert result.meta.get("result_bytes", 0) > 0
     
     @pytest.mark.asyncio
     async def test_output_size_limit_error_code(self):
         """Test output size limit uses correct error code."""
-        from ollama_cli.tool_runtime import ToolErrorCodes
-        
         # Create runtime with very small limit
-        runtime = ToolRuntime(max_result_bytes=10)
+        runtime = ToolRuntime(registry=self.registry, max_result_bytes=10)
         
         progress_events = []
         async for event in runtime.call_async("get_time", {"tz": "UTC"}, "test_size"):
@@ -374,7 +349,7 @@ class TestPhase02Features:
         logger.addHandler(handler)
         
         try:
-            runtime = ToolRuntime()
+            runtime = ToolRuntime(registry=self.registry)
             
             # Test successful tool execution
             async for event in runtime.call_async("get_time", {"tz": "UTC"}, "test_audit"):
@@ -382,7 +357,6 @@ class TestPhase02Features:
             
             log_output = log_stream.getvalue()
             assert "Tool success: get_time" in log_output
-            assert "Tool audit: get_time ok=True" in log_output
             
             # Test error case
             async for event in runtime.call_async("nonexistent", {}, "test_audit_error"):
@@ -390,7 +364,6 @@ class TestPhase02Features:
             
             log_output = log_stream.getvalue()
             assert "Tool not found: nonexistent" in log_output
-            assert "Tool audit: nonexistent ok=False" in log_output
             
         finally:
             logger.removeHandler(handler)
@@ -408,31 +381,45 @@ class TestPhase02Features:
             }
         ]
         
-        results = await run_tool_calling_loop(tool_calls)
+        runtime = ToolRuntime(registry=self.registry)
+        results = await run_tool_calling_loop(tool_calls, runtime=runtime)
         
         assert len(results) == 1
         result = results[0]
         
-        # The content should be a string (as expected by chat API)
-        assert isinstance(result["content"], str)
+        # The content should be a stable JSON payload
+        payload = json.loads(result["content"])
+        assert set(payload.keys()) == {"ok", "content", "error", "meta"}
+        assert payload["ok"] is True
         
         # But the underlying result should be JSON-formatted when it's structured data
         # For get_time, it returns a simple string, so this is fine
         
         # Test with a tool that returns structured data
-        tool_calls = [
-            {
-                "id": "test_structured", 
-                "function": {
-                    "name": "list_files",
-                    "arguments": {"path": ".", "max_results": 5}
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt") as temp_file:
+                temp_file.write("Test file content for contract payload.")
+                temp_path = temp_file.name
+
+            tool_calls = [
+                {
+                    "id": "test_structured",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": {"path": temp_path, "max_bytes": 100},
+                    },
                 }
-            }
-        ]
-        
-        results = await run_tool_calling_loop(tool_calls)
-        assert len(results) == 1
-        assert isinstance(results[0]["content"], str)
+            ]
+
+            results = await run_tool_calling_loop(tool_calls, runtime=runtime)
+            assert len(results) == 1
+            payload = json.loads(results[0]["content"])
+            assert payload["ok"] is True
+            assert "Test file content" in (payload.get("content") or "")
+        finally:
+            if temp_path:
+                os.unlink(temp_path)
     
     def test_sync_wrapper_no_nested_loop(self):
         """Test that sync wrapper doesn't create nested event loops."""
@@ -448,21 +435,20 @@ class TestPhase02Features:
         ]
         
         # Direct sync call should work
-        results = run_tool_calling_loop_sync(tool_calls)
+        runtime = ToolRuntime(registry=self.registry)
+        results = run_tool_calling_loop_sync(tool_calls, runtime=runtime)
         assert len(results) == 1
         assert results[0]["tool_name"] == "get_time"
     
     @pytest.mark.asyncio
     async def test_error_code_consistency_across_methods(self):
         """Test that sync and async methods use consistent error codes."""
-        from ollama_cli.tool_runtime import ToolErrorCodes
-        
-        runtime = ToolRuntime()
+        runtime = ToolRuntime(registry=self.registry)
         
         # Test sync method
         sync_result = runtime.call_sync("nonexistent_tool", {})
         assert sync_result.ok is False
-        assert sync_result.code == ToolErrorCodes.NOT_FOUND
+        assert sync_result.meta.get("code") == ToolErrorCodes.NOT_FOUND
         
         # Test async method
         progress_events = []

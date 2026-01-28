@@ -5,15 +5,15 @@ using text_extract utilities to avoid circular dependencies with WebTools.
 """
 
 import json
-import re
 import time
-from typing import Any, Dict, List, Tuple, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import xml.etree.ElementTree as ET
 
 import requests
 
-from ..text_extract import html_to_text, clean_ws
 from ..config import DEFAULT_KIWIX_URL, DEFAULT_KIWIX_SEARCH_COUNT, DEFAULT_KIWIX_MAX_CHARS
+from ..errors import ToolTimeoutError
+from ..text_extract import html_to_text, clean_ws
 from .core import KiwixToolError, SearchResult
 
 
@@ -56,7 +56,7 @@ class KiwixTools:
         import hashlib
         return hashlib.md5(key.encode()).hexdigest()
     
-    def _get_cached(self, cache_key: str) -> Dict[str, Any] | None:
+    def _get_cached(self, cache_key: str) -> Optional[Dict[str, Any]]:
         """Get cached response if valid."""
         if cache_key in self._cache:
             timestamp, data = self._cache[cache_key]
@@ -100,8 +100,12 @@ class KiwixTools:
             data = response.json()
             self._set_cached(cache_key, data)
             return data
-        except Exception as e:
+        except requests.Timeout as e:
+            raise ToolTimeoutError(f"kiwix suggest timed out: {e}") from e
+        except requests.RequestException as e:
             raise KiwixToolError(f"suggest failed: {e}") from e
+        except ValueError as e:
+            raise KiwixToolError(f"suggest returned invalid JSON: {e}") from e
     
     def search_xml(self, query: str, zim: str, count: int = 8, start: int = 0) -> List[SearchResult]:
         """Search ZIM content using XML endpoint.
@@ -159,6 +163,8 @@ class KiwixTools:
             self._set_cached(cache_key, {"results": [r.__dict__ for r in results]})
             return results
             
+        except requests.Timeout as e:
+            raise ToolTimeoutError(f"kiwix search timed out: {e}") from e
         except requests.RequestException as e:
             raise KiwixToolError(f"search request failed: {e}") from e
         except ET.ParseError as e:
@@ -219,6 +225,8 @@ class KiwixTools:
             self._set_cached(cache_key, result)
             return result
             
+        except requests.Timeout as e:
+            raise ToolTimeoutError(f"kiwix open timed out: {e}") from e
         except requests.RequestException as e:
             raise KiwixToolError(f"open request failed: {e}") from e
     
@@ -243,23 +251,17 @@ class KiwixTools:
         return clean_ws(s)
 
 
-# Singleton instance for tool functions
-_kiwix_tools_instance = None
-
-
-def _get_kiwix_tools() -> KiwixTools:
-    """Get singleton KiwixTools instance."""
-    global _kiwix_tools_instance
-    if _kiwix_tools_instance is None:
-        _kiwix_tools_instance = KiwixTools()
-    return _kiwix_tools_instance
-
-
-def tool_kiwix_search(query: str, zim: str, count: int = DEFAULT_KIWIX_SEARCH_COUNT,
-                     start: int = 0) -> str:
+def tool_kiwix_search(
+    kiwix_tools: KiwixTools,
+    query: str,
+    zim: str,
+    count: int = DEFAULT_KIWIX_SEARCH_COUNT,
+    start: int = 0,
+) -> str:
     """Tool wrapper for Kiwix search.
     
     Args:
+        kiwix_tools: KiwixTools instance
         query: Search query
         zim: ZIM file name
         count: Number of results (default 8)
@@ -268,26 +270,31 @@ def tool_kiwix_search(query: str, zim: str, count: int = DEFAULT_KIWIX_SEARCH_CO
     Returns:
         JSON string with search results
     """
-    try:
-        kiwix_tools = _get_kiwix_tools()
-        results = kiwix_tools.search_xml(query, zim, count, start)
-        
-        return json.dumps({
+    results = kiwix_tools.search_xml(query, zim, count, start)
+
+    return json.dumps(
+        {
             "query": query,
             "zim": zim,
             "results": [result.__dict__ for result in results],
             "count": len(results),
             "start": start,
-        }, indent=2, ensure_ascii=False)
-        
-    except Exception as e:
-        return json.dumps({"error": f"Kiwix search failed: {e}"}, ensure_ascii=False)
+        },
+        indent=2,
+        ensure_ascii=False,
+    )
 
 
-def tool_kiwix_open(zim: str, path: str, max_chars: int = DEFAULT_KIWIX_MAX_CHARS) -> str:
+def tool_kiwix_open(
+    kiwix_tools: KiwixTools,
+    zim: str,
+    path: str,
+    max_chars: int = DEFAULT_KIWIX_MAX_CHARS,
+) -> str:
     """Tool wrapper for opening Kiwix content.
     
     Args:
+        kiwix_tools: KiwixTools instance
         zim: ZIM file name
         path: Content path within ZIM
         max_chars: Maximum characters to extract (default 12000)
@@ -295,20 +302,15 @@ def tool_kiwix_open(zim: str, path: str, max_chars: int = DEFAULT_KIWIX_MAX_CHAR
     Returns:
         JSON string with content
     """
-    try:
-        kiwix_tools = _get_kiwix_tools()
-        result = kiwix_tools.open_raw(zim, path, max_chars)
-        
-        return json.dumps(result, indent=2, ensure_ascii=False)
-        
-    except Exception as e:
-        return json.dumps({"error": f"Kiwix open failed: {e}"}, ensure_ascii=False)
+    result = kiwix_tools.open_raw(zim, path, max_chars)
+    return json.dumps(result, indent=2, ensure_ascii=False)
 
 
-def tool_kiwix_suggest(zim: str, term: str, count: int = 8) -> str:
+def tool_kiwix_suggest(kiwix_tools: KiwixTools, zim: str, term: str, count: int = 8) -> str:
     """Tool wrapper for Kiwix suggestions.
     
     Args:
+        kiwix_tools: KiwixTools instance
         zim: ZIM file name
         term: Term to complete
         count: Number of suggestions (default 8)
@@ -316,34 +318,27 @@ def tool_kiwix_suggest(zim: str, term: str, count: int = 8) -> str:
     Returns:
         JSON string with suggestions
     """
-    try:
-        kiwix_tools = _get_kiwix_tools()
-        result = kiwix_tools.suggest(zim, term, count)
-        
-        return json.dumps(result, indent=2, ensure_ascii=False)
-        
-    except Exception as e:
-        return json.dumps({"error": f"Kiwix suggest failed: {e}"}, ensure_ascii=False)
+    result = kiwix_tools.suggest(zim, term, count)
+    return json.dumps(result, indent=2, ensure_ascii=False)
 
 
-def tool_kiwix_list_zims(zim_dir: str = "/mnt/zim/zims") -> str:
+def tool_kiwix_list_zims(kiwix_tools: KiwixTools, zim_dir: str = "/mnt/zim/zims") -> str:
     """Tool wrapper for listing ZIM files.
     
     Args:
+        kiwix_tools: KiwixTools instance
         zim_dir: Directory containing ZIM files (default '/mnt/zim/zims')
         
     Returns:
         JSON string with ZIM file list
     """
-    try:
-        kiwix_tools = _get_kiwix_tools()
-        results = kiwix_tools.list_zims(zim_dir)
-        
-        return json.dumps({
+    results = kiwix_tools.list_zims(zim_dir)
+    return json.dumps(
+        {
             "zim_dir": zim_dir,
             "zims": results,
             "count": len(results),
-        }, indent=2, ensure_ascii=False)
-        
-    except Exception as e:
-        return json.dumps({"error": f"Kiwix list failed: {e}"}, ensure_ascii=False)
+        },
+        indent=2,
+        ensure_ascii=False,
+    )

@@ -18,7 +18,26 @@ def __getattr__(name: str):
     if name == "OllamaClient":
         from .client import OllamaClient as _OllamaClient
         return _OllamaClient
+    if name == "ToolRegistry":
+        from .tools import ToolRegistry as _ToolRegistry
+        return _ToolRegistry
+    if name == "ToolRuntime":
+        from .runtime import ToolRuntime as _ToolRuntime
+        return _ToolRuntime
+    if name == "run_tool_calling_loop":
+        from .loop import run_tool_calling_loop as _run_tool_calling_loop
+        return _run_tool_calling_loop
+    if name == "run_tool_calling_loop_sync":
+        from .loop import run_tool_calling_loop_sync as _run_tool_calling_loop_sync
+        return _run_tool_calling_loop_sync
     raise AttributeError(name)
 
 
-__all__ = ["main", "OllamaClient"]
+__all__ = [
+    "main",
+    "OllamaClient",
+    "ToolRegistry",
+    "ToolRuntime",
+    "run_tool_calling_loop",
+    "run_tool_calling_loop_sync",
+]

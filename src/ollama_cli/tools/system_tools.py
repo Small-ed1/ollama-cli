@@ -9,6 +9,8 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
+from ..errors import ToolAccessError, ToolArgumentError, ToolExecutionError, ToolOutputTooLargeError
+
 
 def tool_get_time(tz: str = "local") -> str:
     """Get current time and timezone information.
@@ -59,7 +61,7 @@ def tool_get_time(tz: str = "local") -> str:
         
         return json.dumps(time_info, indent=2, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"error": f"Failed to get time: {e}"}, ensure_ascii=False)
+        raise ToolExecutionError(f"Failed to get time: {e}") from e
 
 
 def tool_read_file(path: str, max_bytes: int = 8000, allowed_paths: Optional[List[str]] = None, 
@@ -86,10 +88,7 @@ def tool_read_file(path: str, max_bytes: int = 8000, allowed_paths: Optional[Lis
         # Check if path is dangerous
         for dangerous in dangerous_paths:
             if path.startswith(dangerous):
-                return json.dumps({
-                    "error": f"Access denied: dangerous path {path}",
-                    "path": path
-                }, ensure_ascii=False)
+                raise ToolAccessError(f"Access denied: dangerous path {path}", meta={"path": path})
         
         # Use file_security if provided, otherwise use legacy checks
         if file_security is not None:
@@ -108,11 +107,10 @@ def tool_read_file(path: str, max_bytes: int = 8000, allowed_paths: Optional[Lis
                             allowed = True
                             break
                     if not allowed:
-                        return json.dumps({
-                            "error": f"Access denied: path {path} not in allowed paths",
-                            "path": path,
-                            "allowed_paths": allowed_paths
-                        }, ensure_ascii=False)
+                        raise ToolAccessError(
+                            f"Access denied: path {path} not in allowed paths",
+                            meta={"path": path, "allowed_paths": allowed_paths},
+                        )
         else:
             # Legacy path checking if no file_security provided
             if allowed_paths is not None:
@@ -124,25 +122,22 @@ def tool_read_file(path: str, max_bytes: int = 8000, allowed_paths: Optional[Lis
                         allowed = True
                         break
                 if not allowed:
-                    return json.dumps({
-                        "error": f"Access denied: path {path} not in allowed paths",
-                        "path": path,
-                        "allowed_paths": allowed_paths
-                    }, ensure_ascii=False)
+                    raise ToolAccessError(
+                        f"Access denied: path {path} not in allowed paths",
+                        meta={"path": path, "allowed_paths": allowed_paths},
+                    )
         
         # Validate path is safe (basic security check)
         if not os.path.isfile(path):
-            return json.dumps({"error": f"File not found: {path}"}, ensure_ascii=False)
+            raise ToolArgumentError(f"File not found: {path}", meta={"path": path})
         
         # Check file size first
         file_size = os.path.getsize(path)
         if file_size > max_bytes:
-            return json.dumps({
-                "error": f"File too large: {file_size} bytes (max: {max_bytes})",
-                "path": path,
-                "size": file_size,
-                "max_allowed": max_bytes
-            }, ensure_ascii=False)
+            raise ToolOutputTooLargeError(
+                f"File too large: {file_size} bytes (max: {max_bytes})",
+                meta={"path": path, "size": file_size, "max_allowed": max_bytes},
+            )
         
         # Read file content
         with open(path, 'r', encoding='utf-8', errors='replace') as f:
@@ -155,9 +150,9 @@ def tool_read_file(path: str, max_bytes: int = 8000, allowed_paths: Optional[Lis
             "encoding": "utf-8"
         }, indent=2, ensure_ascii=False)
         
-    except PermissionError:
-        return json.dumps({"error": f"Permission denied: {path}"}, ensure_ascii=False)
+    except PermissionError as e:
+        raise ToolAccessError(f"Permission denied: {path}", meta={"path": path}) from e
     except UnicodeDecodeError as e:
-        return json.dumps({"error": f"Encoding error reading {path}: {e}"}, ensure_ascii=False)
+        raise ToolExecutionError(f"Encoding error reading {path}: {e}") from e
     except Exception as e:
-        return json.dumps({"error": f"Failed to read file {path}: {e}"}, ensure_ascii=False)
+        raise ToolExecutionError(f"Failed to read file {path}: {e}") from e

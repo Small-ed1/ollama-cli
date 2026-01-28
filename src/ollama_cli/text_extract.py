@@ -1,12 +1,9 @@
-"""Text extraction utilities - zero tool knowledge.
+"""Text extraction utilities - zero tool knowledge."""
 
-This module provides pure utilities for HTML processing and web dependency
-management without any tool-specific coupling.
-"""
+import logging
+from typing import Any
 
-import subprocess
-import sys
-from typing import Any, Optional
+logger = logging.getLogger(__name__)
 
 # Optional dependency globals
 _trafilatura: Any = None
@@ -15,14 +12,7 @@ _web_deps_installed = False
 
 
 def ensure_web_deps() -> bool:
-    """Install and validate optional web dependencies.
-    
-    Installs trafilatura, beautifulsoup4, and readability-lxml on first use
-    with graceful fallback if installation fails.
-    
-    Returns:
-        True if dependencies are available, False otherwise
-    """
+    """Validate optional web dependencies without side effects."""
     global _web_deps_installed, _trafilatura, _beautifulsoup
     if _web_deps_installed:
         return True
@@ -40,24 +30,16 @@ def ensure_web_deps() -> bool:
         missing.append('beautifulsoup4')  # Package name, not import name
     
     if missing:
-        # Also install readability-lxml for better extraction
-        all_deps = missing + ['readability-lxml']
-        try:
-            subprocess.run([sys.executable, '-m', 'pip', 'install'] + all_deps, 
-                          check=True, capture_output=True)
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return False
-    
-    # Try importing again after installation
-    try:
-        import trafilatura  # type: ignore[import-not-found]
-        import bs4
-        _trafilatura = trafilatura
-        _beautifulsoup = bs4
-        _web_deps_installed = True
-        return True
-    except ImportError:
+        logger.info(
+            "Optional web deps missing: %s. Install with `pip install ollama-cli[web]`.",
+            ", ".join(missing),
+        )
         return False
+
+    _trafilatura = trafilatura
+    _beautifulsoup = bs4
+    _web_deps_installed = True
+    return True
 
 
 def html_to_text(html: str) -> str:

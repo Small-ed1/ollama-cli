@@ -7,19 +7,17 @@ content access via Kiwix.
 """
 
 import argparse
-import json
+import logging
 import os
 import sys
 from typing import Any, Dict, List, Optional
 
 # Import core components
 from .client import OllamaClient
-from .tools.core import get_tool_functions
-from .tool_parse import run_tool_calling_loop_sync
-
-# Constants
-DEFAULT_BASE_URL = "http://localhost:11434"
-DEFAULT_CONFIG_FILE = os.path.expanduser("~/.ollama_cli_config.json")
+from .config import AppConfig, DEFAULT_BASE_URL, DEFAULT_CONFIG_FILE, load_config_from_env, resolve_config_file
+from .loop import run_tool_calling_loop_sync
+from .runtime import ToolRuntime
+from .tools.registry import ToolRegistry, build_default_registry
 
 
 def _use_advanced_interactive() -> bool:
@@ -29,6 +27,14 @@ def _use_advanced_interactive() -> bool:
     """
     val = os.getenv("OLLAMA_CLI_INTERACTIVE_ADVANCED", "0").lower()
     return val in ("1", "true", "yes", "on")
+
+
+def _get_app_config(args: argparse.Namespace) -> AppConfig:
+    """Get application configuration for CLI commands."""
+    config = getattr(args, "_app_config", None)
+    if isinstance(config, AppConfig):
+        return config
+    return load_config_from_env()
 
 
 def normalize_tools_arg(args) -> Optional[List[str]]:
@@ -46,11 +52,9 @@ def normalize_tools_arg(args) -> Optional[List[str]]:
     return None
 
 
-def _select_tools_from_list(tool_names: List[str]) -> List[Dict[str, Any]]:
+def _select_tools_from_list(tool_names: List[str], registry: ToolRegistry) -> List[Dict[str, Any]]:
     """Select tool definitions from tool_names list."""
-    from .tools.core import TOOL_SPECS
-    
-    available_tools = {spec["function"]["name"]: spec for spec in TOOL_SPECS}
+    available_tools = {spec["function"]["name"]: spec for spec in registry.list_specs()}
     selected_tools = []
     
     for tool_name in tool_names:
@@ -65,7 +69,16 @@ def _select_tools_from_list(tool_names: List[str]) -> List[Dict[str, Any]]:
 def cmd_list(args: argparse.Namespace) -> None:
     """List available models."""
     try:
-        client = OllamaClient(base_url=args.host)
+        app_config = _get_app_config(args)
+        if getattr(args, "debug_tools", False):
+            logging.basicConfig(level=logging.DEBUG)
+        client = OllamaClient(
+            base_url=args.host,
+            timeout=app_config.client.timeout_s,
+            api_key=app_config.client.api_key,
+        )
+        registry = build_default_registry(app_config.tools)
+        runtime = ToolRuntime(registry=registry, runtime_config=app_config.runtime)
         data = client.tags()
         models = data.get("models", [])
         if not models:
@@ -86,7 +99,16 @@ def cmd_list(args: argparse.Namespace) -> None:
 def cmd_pull(args: argparse.Namespace) -> None:
     """Pull a model."""
     try:
-        client = OllamaClient(base_url=args.host)
+        app_config = _get_app_config(args)
+        if getattr(args, "debug_tools", False):
+            logging.basicConfig(level=logging.DEBUG)
+        client = OllamaClient(
+            base_url=args.host,
+            timeout=app_config.client.timeout_s,
+            api_key=app_config.client.api_key,
+        )
+        registry = build_default_registry(app_config.tools)
+        runtime = ToolRuntime(registry=registry, runtime_config=app_config.runtime)
         for chunk in client.pull(args.model):
             status = chunk.get("status", "")
             digest = chunk.get("digest", "")[:12] if chunk.get("digest") else ""
@@ -99,7 +121,12 @@ def cmd_pull(args: argparse.Namespace) -> None:
 def cmd_gen(args: argparse.Namespace) -> None:
     """Generate text."""
     try:
-        client = OllamaClient(base_url=args.host)
+        app_config = _get_app_config(args)
+        client = OllamaClient(
+            base_url=args.host,
+            timeout=app_config.client.timeout_s,
+            api_key=app_config.client.api_key,
+        )
         
         # Build request
         options = None
@@ -158,11 +185,16 @@ def cmd_research(args: argparse.Namespace) -> None:
     try:
         from .research_pipeline import run_deep_research
 
-        client = OllamaClient(base_url=args.host)
+        app_config = _get_app_config(args)
+        client = OllamaClient(
+            base_url=args.host,
+            timeout=app_config.client.timeout_s,
+            api_key=app_config.client.api_key,
+        )
         model = _pick_default_model(client, getattr(args, "model", None))
         preset = getattr(args, "preset", "standard")
         seed_urls = getattr(args, "url", None)
-        searxng_url = getattr(args, "searxng_url", None) or os.getenv("SEARXNG_URL")
+        searxng_url = getattr(args, "searxng_url", None) or app_config.tools.searxng_url
 
         out = run_deep_research(
             client=client,
@@ -181,7 +213,12 @@ def cmd_research(args: argparse.Namespace) -> None:
 def cmd_chat(args: argparse.Namespace) -> None:
     """Interactive chat with tools."""
     try:
-        client = OllamaClient(base_url=args.host)
+        app_config = _get_app_config(args)
+        client = OllamaClient(
+            base_url=args.host,
+            timeout=app_config.client.timeout_s,
+            api_key=app_config.client.api_key,
+        )
 
         # If no model provided, try to use saved configuration.
         if not getattr(args, "model", None):
@@ -223,10 +260,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
         tools_list = normalize_tools_arg(args)
         tools = None
         if tools_list:
-            tools = _select_tools_from_list(tools_list)
-        
-        # Lazy tool function loading - only if tools enabled
-        tool_funcs = get_tool_functions() if tools else None
+            tools = _select_tools_from_list(tools_list, registry)
         
         # Set up file access controls for security
         file_security: Dict[str, Any] = {
@@ -281,8 +315,12 @@ def cmd_chat(args: argparse.Namespace) -> None:
                 messages.append(assistant_msg)
                 
                 # Execute tools if any were called
-                if tool_calls and tool_funcs:
-                    tool_results = run_tool_calling_loop_sync(tool_calls, tool_context=file_security)
+                if tool_calls and tools:
+                    tool_results = run_tool_calling_loop_sync(
+                        tool_calls,
+                        tool_context=file_security,
+                        runtime=runtime,
+                    )
                     
                     # Add tool results to conversation
                     for result in tool_results:
@@ -322,8 +360,13 @@ def cmd_interactive(args):
 
     from .interactive import interactive_or_saved_config, start_configured_chat, save_configuration
     
-    base_url = os.getenv("OLLAMA_BASE_URL", args.host or DEFAULT_BASE_URL)
-    client = OllamaClient(base_url=base_url)
+    app_config = _get_app_config(args)
+    base_url = args.host or app_config.client.base_url or DEFAULT_BASE_URL
+    client = OllamaClient(
+        base_url=base_url,
+        timeout=app_config.client.timeout_s,
+        api_key=app_config.client.api_key,
+    )
     config = interactive_or_saved_config(client)
     
     if not config:
@@ -406,7 +449,8 @@ def main():
     # Check for reset config flag first
     if "--reset-config" in sys.argv:
         try:
-            os.remove(DEFAULT_CONFIG_FILE)
+            config_path = resolve_config_file(DEFAULT_CONFIG_FILE)
+            os.remove(config_path)
             print("Configuration reset successfully")
         except Exception as e:
             print(f"Failed to reset configuration: {e}")
@@ -419,7 +463,8 @@ def main():
     if len(sys.argv) == 1:
         # Plan C: use advanced interactive when explicitly enabled, or when the
         # user has no saved configuration yet (first-run friendly).
-        if _use_advanced_interactive() or not os.path.exists(DEFAULT_CONFIG_FILE):
+        config_path = resolve_config_file(DEFAULT_CONFIG_FILE)
+        if _use_advanced_interactive() or not os.path.exists(config_path):
             from .interactive import start_interactive
             start_interactive()
             return 0
@@ -428,8 +473,13 @@ def main():
         # Import interactive functions only when needed
         from .interactive import interactive_or_saved_config, start_configured_chat
         
-        base_url = os.getenv("OLLAMA_BASE_URL", DEFAULT_BASE_URL)
-        client = OllamaClient(base_url=base_url)
+        app_config = load_config_from_env()
+        base_url = app_config.client.base_url or DEFAULT_BASE_URL
+        client = OllamaClient(
+            base_url=base_url,
+            timeout=app_config.client.timeout_s,
+            api_key=app_config.client.api_key,
+        )
         config = interactive_or_saved_config(client)
         
         if not config:
@@ -444,9 +494,12 @@ def main():
     # Use regular argument parsing for specific commands
     parser = build_parser()
     args = parser.parse_args()
-    
-    # Prefer environment variable for base URL, fallback to args.host
-    base_url = os.getenv("OLLAMA_BASE_URL", args.host or DEFAULT_BASE_URL)
+
+    app_config = load_config_from_env()
+    args._app_config = app_config
+
+    # Prefer CLI argument for base URL, fallback to env config
+    base_url = args.host or app_config.client.base_url or DEFAULT_BASE_URL
     args.host = base_url
     
     # Execute command
