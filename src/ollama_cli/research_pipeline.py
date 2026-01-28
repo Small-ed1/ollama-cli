@@ -230,5 +230,30 @@ def run_deep_research(
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(packet, ensure_ascii=False)},
     ]
-    resp = _chat_once(client, model, messages, options={"temperature": 0.3})
-    return _content_from_chat_response(resp).strip()
+    digest_text = None
+    try:
+        resp = _chat_once(client, model, messages, options={"temperature": 0.3})
+        # Extract content from the response generically
+        digest_text = _content_from_chat_response(resp).strip()
+    except Exception:
+        digest_text = None
+
+    if digest_text:
+        return digest_text
+
+    # Fallback: build a concise digest from known sources
+    lines = ["Deep research digest (offline fallback):", ""]
+    lines.append(f"Query: {query}")
+    lines.append("")
+    for i, s in enumerate(sources[: min(len(sources), preset.max_sources_open)]):
+        title = s.get("title", "")
+        url = s.get("url", "")
+        snippet = s.get("snippet", "")
+        lines.append(f"{i+1}. {title} - {url}")
+        if snippet:
+            lines.append(f"   {snippet[:256]}")
+    if not sources:
+        lines.append("No sources opened.")
+    lines.append("")
+    lines.append("Note: Digest generated offline due to unavailable writer service.")
+    return "\n".join(lines)
