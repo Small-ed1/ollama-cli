@@ -1,9 +1,11 @@
+README.md
 pyproject.toml
 src/ollama_cli/__init__.py
 src/ollama_cli/cli.py
 src/ollama_cli/client.py
 src/ollama_cli/config.py
 src/ollama_cli/interactive.py
+src/ollama_cli/research_pipeline.py
 src/ollama_cli/text_extract.py
 src/ollama_cli/tool_parse.py
 src/ollama_cli/tool_runtime.py

@@ -30,7 +30,8 @@ def _print_advanced_help() -> None:
 def _safe_input(prompt: str) -> Optional[str]:
     try:
         return input(prompt)
-    except EOFError:
+    except (EOFError, KeyboardInterrupt):
+        # Treat Ctrl-D / Ctrl-C as end-of-input in the interactive loop
         return None
 
 
@@ -523,7 +524,7 @@ def start_interactive():
                 )
                 print("\n" + out + "\n")
             except Exception as e:
-                print(f"Research failed: {e}")
+                print(f"Deep research failed: {e}")
                 urls = (_safe_input("Paste URLs to research instead (comma-separated, blank to cancel): ") or "").strip()
                 if not urls:
                     continue

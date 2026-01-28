@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode, urlparse
 
 import requests
+import sys
 
 from ..text_extract import html_to_text, clean_ws
 from ..config import DEFAULT_SEARXNG_URL, DEFAULT_WEB_MAX_CHARS, DEFAULT_WEB_SEARCH_COUNT
@@ -139,7 +140,8 @@ class WebTools:
             return results
             
         except requests.RequestException as e:
-            raise WebToolError(f"Search request failed: {e}") from e
+            print(f"Warning: Web search failed ({e}); continuing with empty results.", file=sys.stderr)
+            return []
         except (KeyError, ValueError) as e:
             raise WebToolError(f"Invalid search response format: {e}") from e
     
