@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ollama-cli"
+version = "1.0.0"
+description = "Command-line interface for Ollama with tool capabilities"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = ["requests"]
+authors = [{name = "Author", email = "author@example.com"}]
+
+[project.scripts]
+ollama-cli = "ollama_cli.cli:main"

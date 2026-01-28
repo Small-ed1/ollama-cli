@@ -1,0 +1,36 @@
+{
+  "ollama": {
+    "base_url": "http://127.0.0.1:11434",
+    "models": {
+      "planner": "llama3.2:latest",
+      "extractor": "llama3.2:latest",
+      "writer": "llama3.2:latest"
+    },
+    "options": {
+      "planner": { "temperature": 0.2, "top_p": 0.9, "num_ctx": 4096 },
+      "extractor": { "temperature": 0.1, "top_p": 0.9, "num_ctx": 4096 },
+      "writer": { "temperature": 0.4, "top_p": 0.9, "num_ctx": 8192 }
+    }
+  },
+  "searxng": {
+    "base_url": "http://127.0.0.1:8080",
+    "default_lang": "en",
+    "default_region": "us",
+    "default_engines": [],
+    "safesearch": 1
+  },
+  "kiwix": {
+    "base_url": "http://127.0.0.1:8181",
+    "zim_targets": ["archwiki", "wikipedia_en"],
+    "endpoints": {
+      "search": "/search",
+      "open": "/content"
+    }
+  },
+  "defaults": {
+    "mode": "balanced",
+    "citation_style": "inline_plus_list",
+    "conflict_policy": "resolve_if_possible",
+    "archwiki_priority": true
+  }
+}
