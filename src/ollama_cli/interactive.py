@@ -24,7 +24,7 @@ def _print_advanced_help() -> None:
     print("  research <query>          Deep research with citations")
     print("  config                    Run configuration wizard")
     print("  defaults                  Show current defaults")
-    print("  exit                      Quit")
+    print("  exit | /exit | /quit | /q  Quit")
 
 
 def _safe_input(prompt: str) -> Optional[str]:
@@ -308,7 +308,7 @@ def start_configured_chat(client: OllamaClient, config: Dict[str, Any]):
     return cmd_chat(args)
 
 
-def start_interactive():
+def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
     """Hybrid interactive shell (Plan C).
 
     This guided shell routes users to the right action without requiring
@@ -325,7 +325,10 @@ def start_interactive():
         api_key=app_config.client.api_key,
     )
 
-    config = load_configuration() or {}
+    if config_override is not None:
+        config = config_override
+    else:
+        config = load_configuration() or {}
     current_model = config.get("model")
     current_tools = config.get("tools", [])
     current_system = config.get("system")
@@ -370,7 +373,7 @@ def start_interactive():
             line = pending_line
             pending_line = None
         else:
-            line = _safe_input("ollama> ")
+            line = _safe_input("ollama> ")  # type: ignore[assignment]
         if line is None:
             print("\nGoodbye!")
             return
@@ -380,7 +383,7 @@ def start_interactive():
             continue
 
         lowered = line.lower()
-        if lowered in {"exit", "quit", "q"}:
+        if lowered in {"exit", "quit", "q", "/exit", "/quit", "/q"}:
             print("Goodbye!")
             return
 
@@ -440,7 +443,7 @@ def start_interactive():
             continue
 
         if cmd == "gen":
-            model = None
+            model: Optional[str] = None  # type: ignore[assignment]
             prompt = ""
             if rest:
                 if len(rest) >= 2:
@@ -450,7 +453,8 @@ def start_interactive():
                     prompt = " ".join(rest).strip()
 
             if not prompt:
-                prompt = (_safe_input("Prompt: ") or "").strip()
+                prompt_input = _safe_input("Prompt: ")  # type: ignore[assignment]
+                prompt = (prompt_input or "").strip()
             if not prompt:
                 continue
 
@@ -466,7 +470,7 @@ def start_interactive():
                 cmd_gen(
                     argparse.Namespace(
                         host=base_url,
-                        model=model,
+                        model=model if isinstance(model, str) else str(model or ""),
                         prompt=prompt,
                         stream=False,
                         think=current_think,
@@ -486,7 +490,7 @@ def start_interactive():
 
             args = argparse.Namespace(
                 host=base_url,
-                model=model,
+                model=(model if isinstance(model, str) else str(model or "")),
                 system=current_system,
                 tools_list=current_tools,
                 tools=False,

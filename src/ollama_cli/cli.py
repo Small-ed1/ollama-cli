@@ -362,7 +362,7 @@ def cmd_interactive(args):
         start_interactive()
         return 0
 
-    from .interactive import interactive_or_saved_config, start_configured_chat, save_configuration
+    from .interactive import interactive_or_saved_config, save_configuration, start_interactive
     
     app_config = _get_app_config(args)
     base_url = args.host or app_config.client.base_url or DEFAULT_BASE_URL
@@ -379,7 +379,8 @@ def cmd_interactive(args):
     if config.get("save"):
         save_configuration(config)
     
-    return start_configured_chat(client, config)
+    start_interactive(config)
+    return 0
 
 
 def build_parser():
@@ -444,7 +445,7 @@ def build_parser():
     sub_interactive = subparsers.add_parser("interactive", help="Run interactive setup + chat")
     sub_interactive.add_argument("--advanced", action="store_true", help="Launch the advanced interactive shell")
     sub_interactive.set_defaults(func=cmd_interactive)
-    
+
     return parser
 
 
@@ -465,18 +466,15 @@ def main():
     
     # Check if we should run interactive mode by default
     if len(sys.argv) == 1:
-        # Plan C: use advanced interactive when explicitly enabled, or when the
-        # user has no saved configuration yet (first-run friendly).
-        config_path = resolve_config_file(DEFAULT_CONFIG_FILE)
-        if _use_advanced_interactive() or not os.path.exists(config_path):
+        # Use advanced interactive when explicitly enabled, otherwise show
+        # the config picker first then route to the full interactive menu.
+        if _use_advanced_interactive():
             from .interactive import start_interactive
             start_interactive()
             return 0
 
-        # Fallback to existing interactive path (saved config wizard)
-        # Import interactive functions only when needed
-        from .interactive import interactive_or_saved_config, start_configured_chat
-        
+        from .interactive import interactive_or_saved_config, save_configuration, start_interactive
+
         app_config = load_config_from_env()
         base_url = app_config.client.base_url or DEFAULT_BASE_URL
         client = OllamaClient(
@@ -485,15 +483,15 @@ def main():
             api_key=app_config.client.api_key,
         )
         config = interactive_or_saved_config(client)
-        
+
         if not config:
             return 1
-        
+
         if config.get("save"):
-            from .interactive import save_configuration
             save_configuration(config)
-        
-        return start_configured_chat(client, config)
+
+        start_interactive(config)
+        return 0
     
     # Use regular argument parsing for specific commands
     parser = build_parser()
