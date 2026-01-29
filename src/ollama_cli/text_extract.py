@@ -19,25 +19,30 @@ def ensure_web_deps() -> bool:
     
     # Check if dependencies are available by importing actual modules
     missing = []
+    # Local optional dependency modules (set to None if unavailable)
+    # Optional dependency modules will be bound by the import statements below
     try:
-        import trafilatura  # type: ignore[import-not-found]
+        import trafilatura as _trafilatura_mod  # type: ignore[import-not-found]
     except ImportError:
+        _trafilatura_mod = None  # type: ignore
         missing.append('trafilatura')
-    
     try:
-        import bs4
+        import bs4 as _bs4_mod  # type: ignore[import-not-found]
+        
     except ImportError:
+        _bs4_mod = None  # type: ignore
         missing.append('beautifulsoup4')  # Package name, not import name
-    
+
     if missing:
         logger.info(
             "Optional web deps missing: %s. Install with `pip install ollama-cli[web]`.",
             ", ".join(missing),
         )
         return False
-
-    _trafilatura = trafilatura
-    _beautifulsoup = bs4
+    # Bind the loaded modules to the module globals for runtime use
+    global _trafilatura, _beautifulsoup
+    _trafilatura = _trafilatura_mod
+    _beautifulsoup = _bs4_mod
     _web_deps_installed = True
     return True
 

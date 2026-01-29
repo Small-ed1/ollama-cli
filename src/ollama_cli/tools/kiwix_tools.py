@@ -9,7 +9,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 import xml.etree.ElementTree as ET
 
-import requests
+import requests  # type: ignore
 
 from ..config import DEFAULT_KIWIX_URL, DEFAULT_KIWIX_SEARCH_COUNT, DEFAULT_KIWIX_MAX_CHARS
 from ..errors import ToolTimeoutError

@@ -11,7 +11,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-import requests
+import requests  # type: ignore
 
 from ..config import DEFAULT_SEARXNG_URL, DEFAULT_WEB_MAX_CHARS, DEFAULT_WEB_SEARCH_COUNT
 from ..errors import ToolTimeoutError
