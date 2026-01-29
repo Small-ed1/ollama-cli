@@ -220,6 +220,10 @@ def cmd_chat(args: argparse.Namespace) -> None:
             api_key=app_config.client.api_key,
         )
 
+        # Set up tool registry and runtime for tool calling
+        registry = build_default_registry(app_config.tools)
+        runtime = ToolRuntime(registry=registry, runtime_config=app_config.runtime)
+
         # If no model provided, try to use saved configuration.
         if not getattr(args, "model", None):
             try:

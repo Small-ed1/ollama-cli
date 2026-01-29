@@ -81,7 +81,7 @@ def get_user_choice(question: str, options: List[str], default: Optional[int] = 
                 return idx
             
             print(f"Please enter a number between 0 and {len(options)-1}")
-        except (ValueError, KeyboardInterrupt):
+        except (ValueError, KeyboardInterrupt, EOFError):
             if default is not None:
                 print(f"Using default choice: {default}")
                 return default
