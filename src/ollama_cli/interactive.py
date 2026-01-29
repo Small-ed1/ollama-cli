@@ -373,7 +373,7 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
             line = pending_line
             pending_line = None
         else:
-            line = _safe_input("ollama> ")
+            line = _safe_input("ollama> ")  # type: ignore[assignment]
         if line is None:
             print("\nGoodbye!")
             return
@@ -443,7 +443,7 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
             continue
 
         if cmd == "gen":
-            model = None
+            model: Optional[str] = None  # type: ignore[assignment]
             prompt = ""
             if rest:
                 if len(rest) >= 2:
@@ -453,7 +453,8 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
                     prompt = " ".join(rest).strip()
 
             if not prompt:
-                prompt = (_safe_input("Prompt: ") or "").strip()
+                prompt_input = _safe_input("Prompt: ")  # type: ignore[assignment]
+                prompt = (prompt_input or "").strip()
             if not prompt:
                 continue
 
@@ -469,7 +470,7 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
                 cmd_gen(
                     argparse.Namespace(
                         host=base_url,
-                        model=model,
+                        model=model if isinstance(model, str) else str(model or ""),
                         prompt=prompt,
                         stream=False,
                         think=current_think,
@@ -489,7 +490,7 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
 
             args = argparse.Namespace(
                 host=base_url,
-                model=model,
+                model=(model if isinstance(model, str) else str(model or "")),
                 system=current_system,
                 tools_list=current_tools,
                 tools=False,
