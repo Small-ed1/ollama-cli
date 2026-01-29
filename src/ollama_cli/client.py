@@ -7,7 +7,7 @@ including model listing, pulling, generation, and chat functionality.
 import json
 from typing import Any, Dict, Iterator, Optional, List
 
-import requests
+import requests  # type: ignore
 
 from .errors import OllamaAPIError, OllamaNetworkError, OllamaTimeoutError
 

@@ -1,1 +1,14 @@
 requests
+
+[dev]
+pytest
+pytest-asyncio
+mypy
+build
+
+[kiwix]
+
+[web]
+trafilatura
+beautifulsoup4
+readability-lxml
