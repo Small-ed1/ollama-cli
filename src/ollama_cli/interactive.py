@@ -24,7 +24,7 @@ def _print_advanced_help() -> None:
     print("  research <query>          Deep research with citations")
     print("  config                    Run configuration wizard")
     print("  defaults                  Show current defaults")
-    print("  exit                      Quit")
+    print("  exit | /exit | /quit | /q  Quit")
 
 
 def _safe_input(prompt: str) -> Optional[str]:
@@ -308,7 +308,7 @@ def start_configured_chat(client: OllamaClient, config: Dict[str, Any]):
     return cmd_chat(args)
 
 
-def start_interactive():
+def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
     """Hybrid interactive shell (Plan C).
 
     This guided shell routes users to the right action without requiring
@@ -325,7 +325,10 @@ def start_interactive():
         api_key=app_config.client.api_key,
     )
 
-    config = load_configuration() or {}
+    if config_override is not None:
+        config = config_override
+    else:
+        config = load_configuration() or {}
     current_model = config.get("model")
     current_tools = config.get("tools", [])
     current_system = config.get("system")
@@ -380,7 +383,7 @@ def start_interactive():
             continue
 
         lowered = line.lower()
-        if lowered in {"exit", "quit", "q"}:
+        if lowered in {"exit", "quit", "q", "/exit", "/quit", "/q"}:
             print("Goodbye!")
             return
 
