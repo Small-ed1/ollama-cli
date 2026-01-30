@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sys
+from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
 # Import core components
@@ -36,6 +37,44 @@ def _get_app_config(args: argparse.Namespace) -> AppConfig:
     if isinstance(config, AppConfig):
         return config
     return load_config_from_env()
+
+
+def _apply_cli_overrides(app_config: AppConfig, args: argparse.Namespace) -> AppConfig:
+    """Apply CLI overrides to config loaded from environment.
+
+    The config dataclasses are frozen, so we use dataclasses.replace.
+    """
+    tools_cfg = app_config.tools
+    client_cfg = app_config.client
+
+    searxng_url = getattr(args, "searxng_url", None)
+    if searxng_url:
+        tools_cfg = replace(tools_cfg, searxng_url=str(searxng_url))
+
+    kiwix_url = getattr(args, "kiwix_url", None)
+    if kiwix_url:
+        tools_cfg = replace(tools_cfg, kiwix_url=str(kiwix_url))
+
+    kiwix_zim_dir = getattr(args, "kiwix_zim_dir", None)
+    if kiwix_zim_dir:
+        tools_cfg = replace(tools_cfg, kiwix_zim_dir=str(kiwix_zim_dir))
+
+    timeout = getattr(args, "timeout", None)
+    if timeout is not None:
+        client_cfg = replace(client_cfg, timeout_s=int(timeout))
+        tools_cfg = replace(tools_cfg, timeout_s=int(timeout))
+
+    return replace(app_config, client=client_cfg, tools=tools_cfg)
+
+
+def _build_client(args: argparse.Namespace, app_config: AppConfig) -> OllamaClient:
+    """Construct OllamaClient using resolved config + CLI overrides."""
+    base_url = getattr(args, "host", None) or app_config.client.base_url or DEFAULT_BASE_URL
+    return OllamaClient(
+        base_url=str(base_url),
+        timeout=app_config.client.timeout_s,
+        api_key=app_config.client.api_key,
+    )
 
 
 def normalize_tools_arg(args) -> Optional[List[str]]:
@@ -73,13 +112,8 @@ def cmd_list(args: argparse.Namespace) -> None:
         app_config = _get_app_config(args)
         if getattr(args, "debug_tools", False):
             logging.basicConfig(level=logging.DEBUG)
-        client = OllamaClient(
-            base_url=args.host,
-            timeout=app_config.client.timeout_s,
-            api_key=app_config.client.api_key,
-        )
-        registry = build_default_registry(app_config.tools)
-        runtime = ToolRuntime(registry=registry, runtime_config=app_config.runtime)
+
+        client = _build_client(args, app_config)
         data = client.tags()
         models = data.get("models", [])
         if not models:
@@ -103,13 +137,8 @@ def cmd_pull(args: argparse.Namespace) -> None:
         app_config = _get_app_config(args)
         if getattr(args, "debug_tools", False):
             logging.basicConfig(level=logging.DEBUG)
-        client = OllamaClient(
-            base_url=args.host,
-            timeout=app_config.client.timeout_s,
-            api_key=app_config.client.api_key,
-        )
-        registry = build_default_registry(app_config.tools)
-        runtime = ToolRuntime(registry=registry, runtime_config=app_config.runtime)
+
+        client = _build_client(args, app_config)
         for chunk in client.pull(args.model):
             status = chunk.get("status", "")
             digest = chunk.get("digest", "")[:12] if chunk.get("digest") else ""
@@ -123,11 +152,8 @@ def cmd_gen(args: argparse.Namespace) -> None:
     """Generate text."""
     try:
         app_config = _get_app_config(args)
-        client = OllamaClient(
-            base_url=args.host,
-            timeout=app_config.client.timeout_s,
-            api_key=app_config.client.api_key,
-        )
+
+        client = _build_client(args, app_config)
         
         # Build request
         options = None
@@ -187,15 +213,12 @@ def cmd_research(args: argparse.Namespace) -> None:
         from .research_pipeline import run_deep_research
 
         app_config = _get_app_config(args)
-        client = OllamaClient(
-            base_url=args.host,
-            timeout=app_config.client.timeout_s,
-            api_key=app_config.client.api_key,
-        )
+        client = _build_client(args, app_config)
         model = _pick_default_model(client, getattr(args, "model", None))
         preset = getattr(args, "preset", "standard")
         seed_urls = getattr(args, "url", None)
-        searxng_url = getattr(args, "searxng_url", None) or app_config.tools.searxng_url
+        searxng_url = app_config.tools.searxng_url
+        kiwix_url = app_config.tools.kiwix_url
 
         out = run_deep_research(
             client=client,
@@ -204,6 +227,7 @@ def cmd_research(args: argparse.Namespace) -> None:
             preset_name=preset,
             seed_urls=seed_urls,
             searxng_url=searxng_url,
+            kiwix_url=kiwix_url,
         )
         print(out)
     except Exception as e:
@@ -215,11 +239,8 @@ def cmd_chat(args: argparse.Namespace) -> None:
     """Interactive chat with tools."""
     try:
         app_config = _get_app_config(args)
-        client = OllamaClient(
-            base_url=args.host,
-            timeout=app_config.client.timeout_s,
-            api_key=app_config.client.api_key,
-        )
+
+        client = _build_client(args, app_config)
 
         # Set up tool registry and runtime for tool calling
         registry = build_default_registry(app_config.tools)
@@ -420,30 +441,81 @@ def cmd_interactive(args):
     return 0
 
 
+def _run_default_interactive(app_config: AppConfig, base_url: str) -> int:
+    """Run interactive setup flow (used when no subcommand is provided)."""
+    if _use_advanced_interactive():
+        from .interactive import start_interactive
+
+        start_interactive()
+        return 0
+
+    from .interactive import interactive_or_saved_config, save_configuration, start_interactive
+
+    client = OllamaClient(
+        base_url=base_url,
+        timeout=app_config.client.timeout_s,
+        api_key=app_config.client.api_key,
+    )
+    config = interactive_or_saved_config(client)
+
+    if not config:
+        return 1
+
+    if config.get("save"):
+        save_configuration(config)
+
+    start_interactive(config)
+    return 0
+
+
+def cmd_tools(args: argparse.Namespace) -> None:
+    """List known tool names (and descriptions)."""
+    app_config = _get_app_config(args)
+    registry = build_default_registry(app_config.tools)
+    specs = registry.list_specs()
+    for spec in specs:
+        fn = spec.get("function") or {}
+        name = fn.get("name") or ""
+        desc = fn.get("description") or ""
+        if getattr(args, "quiet", False):
+            print(str(name))
+        else:
+            print(f"- {name}: {desc}")
+
+
 def build_parser():
     """Build main argument parser."""
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--host", help="Ollama base URL (default: OLLAMA_BASE_URL or http://localhost:11434)")
+    common.add_argument("--timeout", type=int, help="Request timeout in seconds (overrides OLLAMA_TIMEOUT)")
+
+    tool_cfg_group = common.add_argument_group("tool backends")
+    tool_cfg_group.add_argument("--searxng-url", dest="searxng_url", help="Override SearxNG base URL (default: SEARXNG_URL)")
+    tool_cfg_group.add_argument("--kiwix-url", dest="kiwix_url", help="Override Kiwix base URL (default: KIWIX_URL)")
+    tool_cfg_group.add_argument("--kiwix-zim-dir", dest="kiwix_zim_dir", help="Override local ZIM directory (default: KIWIX_ZIM_DIR)")
+
     parser = argparse.ArgumentParser(
         description="Tiny Ollama API CLI with interactive setup",
-        epilog="Run with no arguments for interactive mode"
+        epilog="Run with no arguments for interactive mode",
+        parents=[common],
     )
-    
-    parser.add_argument("--host", help="Base host (default: http://localhost:11434)")
+
     parser.add_argument("--no-interactive", action="store_true", help="Skip interactive setup")
     parser.add_argument("--reset-config", action="store_true", help="Reset saved configuration")
     
     subparsers = parser.add_subparsers(dest="command", required=False)
     
     # List command
-    sub_list = subparsers.add_parser("list", help="List local models (/api/tags)")
+    sub_list = subparsers.add_parser("list", help="List local models (/api/tags)", parents=[common])
     sub_list.set_defaults(func=cmd_list)
     
     # Pull command
-    sub_pull = subparsers.add_parser("pull", help="Pull a model (/api/pull)")
+    sub_pull = subparsers.add_parser("pull", help="Pull a model (/api/pull)", parents=[common])
     sub_pull.add_argument("model", help="Model name to pull")
     sub_pull.set_defaults(func=cmd_pull)
     
     # Generate command
-    sub_gen = subparsers.add_parser("gen", help="Generate text (/api/generate)")
+    sub_gen = subparsers.add_parser("gen", help="Generate text (/api/generate)", parents=[common])
     sub_gen.add_argument("model", help="Model name")
     sub_gen.add_argument("prompt", help="Prompt text")
     sub_gen.add_argument("--stream", action="store_true", help="Stream response")
@@ -451,16 +523,15 @@ def build_parser():
     sub_gen.set_defaults(func=cmd_gen)
 
     # Research command
-    sub_research = subparsers.add_parser("research", help="Deep research with citations")
+    sub_research = subparsers.add_parser("research", help="Deep research with citations", parents=[common])
     sub_research.add_argument("query", help="Research query")
     sub_research.add_argument("--model", help="Model name (defaults to OLLAMA_MODEL or first available)")
     sub_research.add_argument("--preset", choices=["quick", "standard", "deep"], default="standard")
     sub_research.add_argument("--url", action="append", help="Seed URL to include (repeatable). Skips search if provided.")
-    sub_research.add_argument("--searxng-url", help="Override SearxNG base URL")
     sub_research.set_defaults(func=cmd_research)
     
     # Chat command
-    sub_chat = subparsers.add_parser("chat", help="Interactive chat (/api/chat)")
+    sub_chat = subparsers.add_parser("chat", help="Interactive chat (/api/chat)", parents=[common])
     sub_chat.add_argument("model", nargs="?", help="Model name (optional if configured)")
     sub_chat.add_argument("--system", help="System prompt")
     sub_chat.add_argument("--temperature", type=float, help="Sampling temperature")
@@ -477,9 +548,14 @@ def build_parser():
     sub_chat.add_argument("--debug-tools", action="store_true", help="Debug tool execution")
     sub_chat.add_argument("--tool-output", choices=["raw", "summary"], default="summary", help="Tool output format")
     sub_chat.set_defaults(func=cmd_chat)
+
+    # Tools command
+    sub_tools = subparsers.add_parser("tools", help="List available tools", parents=[common])
+    sub_tools.add_argument("--quiet", action="store_true", help="Only print tool names")
+    sub_tools.set_defaults(func=cmd_tools)
     
     # Interactive command
-    sub_interactive = subparsers.add_parser("interactive", help="Run interactive setup + chat")
+    sub_interactive = subparsers.add_parser("interactive", help="Run interactive setup + chat", parents=[common])
     sub_interactive.add_argument("--advanced", action="store_true", help="Launch the advanced interactive shell")
     sub_interactive.set_defaults(func=cmd_interactive)
 
@@ -497,49 +573,22 @@ def main():
         except Exception as e:
             print(f"Failed to reset configuration: {e}")
         return 0
-    
-    # Complete allowlist including "interactive"
-    KNOWN_COMMANDS = ["list", "pull", "gen", "chat", "interactive", "--help", "-h"]
-    
-    # Check if we should run interactive mode by default
-    if len(sys.argv) == 1:
-        # Use advanced interactive when explicitly enabled, otherwise show
-        # the config picker first then route to the full interactive menu.
-        if _use_advanced_interactive():
-            from .interactive import start_interactive
-            start_interactive()
-            return 0
-
-        from .interactive import interactive_or_saved_config, save_configuration, start_interactive
-
-        app_config = load_config_from_env()
-        base_url = app_config.client.base_url or DEFAULT_BASE_URL
-        client = OllamaClient(
-            base_url=base_url,
-            timeout=app_config.client.timeout_s,
-            api_key=app_config.client.api_key,
-        )
-        config = interactive_or_saved_config(client)
-
-        if not config:
-            return 1
-
-        if config.get("save"):
-            save_configuration(config)
-
-        start_interactive(config)
-        return 0
-    
-    # Use regular argument parsing for specific commands
+    # Parse args. If no subcommand is provided, default to interactive mode.
     parser = build_parser()
     args = parser.parse_args()
 
     app_config = load_config_from_env()
+    app_config = _apply_cli_overrides(app_config, args)
     args._app_config = app_config
 
     # Prefer CLI argument for base URL, fallback to env config
-    base_url = args.host or app_config.client.base_url or DEFAULT_BASE_URL
-    args.host = base_url
+    args.host = args.host or app_config.client.base_url or DEFAULT_BASE_URL
+
+    if not getattr(args, "command", None):
+        if getattr(args, "no_interactive", False):
+            parser.print_help()
+            return 1
+        return _run_default_interactive(app_config, str(args.host))
     
     # Execute command
     if hasattr(args, 'func'):
