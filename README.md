@@ -52,7 +52,7 @@ Chat with tools enabled:
 ollama-cli chat llama3.2 --tools --allowed-read-path .
 ```
 
-Deep research (uses SearxNG unless you provide `--url` seed sources):
+Deep research (offline-first with Kiwix when available; otherwise uses SearxNG unless you provide `--url` seed sources):
 
 ```bash
 ollama-cli research "How does speculative decoding work?" --preset quick

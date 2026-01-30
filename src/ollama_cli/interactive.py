@@ -583,6 +583,7 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
                     preset_name=preset,
                     seed_urls=None,
                     searxng_url=app_config.tools.searxng_url,
+                    kiwix_url=app_config.tools.kiwix_url,
                 )
                 print("\n" + out + "\n")
             except Exception as e:
@@ -599,6 +600,7 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
                         preset_name=preset,
                         seed_urls=seed_urls,
                         searxng_url=app_config.tools.searxng_url,
+                        kiwix_url=app_config.tools.kiwix_url,
                     )
                     print("\n" + out + "\n")
                 except Exception as e2:
@@ -632,6 +634,7 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
                     preset_name=preset,
                     seed_urls=None,
                     searxng_url=app_config.tools.searxng_url,
+                    kiwix_url=app_config.tools.kiwix_url,
                 )
                 print("\n" + out + "\n")
             except Exception as e:
