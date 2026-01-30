@@ -1,7 +1,9 @@
 """Text extraction utilities - zero tool knowledge."""
 
+import html as _html
 import importlib
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -10,6 +12,26 @@ logger = logging.getLogger(__name__)
 _trafilatura: Any = None
 _beautifulsoup: Any = None
 _web_deps_installed = False
+
+
+_RE_STRIP_BLOCKS = re.compile(r"(?is)<(script|style|noscript)\b.*?>.*?</\1>")
+_RE_STRIP_HEAD = re.compile(r"(?is)<head\b.*?>.*?</head>")
+_RE_STRIP_COMMENTS = re.compile(r"(?is)<!--.*?-->")
+_RE_STRIP_TAGS = re.compile(r"(?is)<[^>]+>")
+
+
+def _basic_html_to_text(html: str) -> str:
+    """Best-effort HTML -> text without optional dependencies."""
+    s = html or ""
+    # Remove blocks that are almost always noise.
+    s = _RE_STRIP_BLOCKS.sub(" ", s)
+    s = _RE_STRIP_HEAD.sub(" ", s)
+    s = _RE_STRIP_COMMENTS.sub(" ", s)
+    # Strip remaining tags.
+    s = _RE_STRIP_TAGS.sub(" ", s)
+    # Decode entities.
+    s = _html.unescape(s)
+    return clean_ws(s)
 
 
 def ensure_web_deps() -> bool:
@@ -58,7 +80,7 @@ def html_to_text(html: str) -> str:
         Readable text content
     """
     if not ensure_web_deps():
-        return html
+        return _basic_html_to_text(html)
     
     # Try trafilatura first (better at extracting main content)
     try:
@@ -76,9 +98,9 @@ def html_to_text(html: str) -> str:
             if BeautifulSoup:
                 soup = BeautifulSoup(html, "html.parser")
                 return clean_ws(soup.get_text(" "))
-        return clean_ws(html)
+        return _basic_html_to_text(html)
     except Exception:
-        return clean_ws(html)
+        return _basic_html_to_text(html)
 
 
 def clean_ws(s: str) -> str:
