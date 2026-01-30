@@ -9,7 +9,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 import xml.etree.ElementTree as ET
 
 import requests  # type: ignore
@@ -50,6 +50,158 @@ class KiwixTools:
         
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "ollama-cli-kiwix/1.0"})
+
+    def ping(self) -> bool:
+        """Return True if the configured kiwix-serve is reachable."""
+        try:
+            r = self.session.get(f"{self.kiwix_url}/", timeout=min(self.timeout, 3))
+            return 200 <= r.status_code < 500
+        except Exception:
+            return False
+
+    def catalog_search_books(self, query: str, count: int = 10) -> List[Dict[str, Any]]:
+        """Search the OPDS catalog for available books.
+
+        Returns:
+            List of dicts: {"title": str, "zim_id": str}
+        """
+        self._rate_limit()
+        q = (query or "").strip()
+        if not q:
+            raise KiwixToolError("query cannot be empty")
+
+        count = min(max(int(count), 1), 50)
+        cache_key = self._cache_key("catalog_search", {"query": q, "count": count})
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+
+        try:
+            r = self.session.get(
+                f"{self.kiwix_url}/catalog/search",
+                params={"query": q, "count": count},  # type: ignore[arg-type]
+                timeout=self.timeout,
+            )
+            r.raise_for_status()
+        except requests.Timeout as e:
+            raise ToolTimeoutError(f"kiwix catalog search timed out: {e}") from e
+        except requests.RequestException as e:
+            raise KiwixToolError(f"catalog search request failed: {e}") from e
+
+        try:
+            root = ET.fromstring(r.text)
+        except ET.ParseError as e:
+            raise KiwixToolError(f"invalid OPDS XML: {e}") from e
+
+        ns = {"atom": "http://www.w3.org/2005/Atom"}
+        out: List[Dict[str, Any]] = []
+        for entry in root.findall("atom:entry", ns):
+            title = (entry.findtext("atom:title", "", ns) or "").strip()
+            zim_id: Optional[str] = None
+            for link in entry.findall("atom:link", ns):
+                href = (link.get("href") or "").strip()
+                if href.startswith("/content/"):
+                    zim_id = href.split("/content/", 1)[1].strip("/")
+                    break
+            if not zim_id:
+                continue
+            out.append({"title": title, "zim_id": zim_id})
+
+        self._set_cached(cache_key, out)
+        return out
+
+    def search_rss(self, query: str, zim: Optional[str], count: int = 8, start: int = 0) -> List[Dict[str, Any]]:
+        """Search via kiwix-serve /search RSS endpoint.
+
+        Args:
+            query: Search query
+            zim: Optional content id to restrict search (None = search across library)
+            count: Number of results
+            start: Start offset
+
+        Returns:
+            List of dicts: {"title": str, "zim": str, "path": str, "snippet": str}
+        """
+        self._rate_limit()
+        q = (query or "").strip()
+        if not q:
+            raise KiwixToolError("query cannot be empty")
+
+        count = min(max(int(count), 1), 50)
+        start = max(int(start), 0)
+
+        cache_key = self._cache_key(
+            "search_rss",
+            {"query": q, "zim": zim or "", "count": count, "start": start},
+        )
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            return cached  # type: ignore[return-value]
+
+        params: Dict[str, Any] = {
+            "pattern": q,
+            "format": "xml",
+            "pageLength": count,
+            "start": start,
+        }
+        if zim:
+            params["content"] = zim
+
+        try:
+            r = self.session.get(
+                f"{self.kiwix_url}/search",
+                params=params,  # type: ignore[arg-type]
+                timeout=self.timeout,
+            )
+            r.raise_for_status()
+        except requests.Timeout as e:
+            raise ToolTimeoutError(f"kiwix search timed out: {e}") from e
+        except requests.RequestException as e:
+            raise KiwixToolError(f"search request failed: {e}") from e
+
+        try:
+            root = ET.fromstring(r.text)
+        except ET.ParseError as e:
+            raise KiwixToolError(f"invalid RSS XML: {e}") from e
+
+        out: List[Dict[str, Any]] = []
+        for item in root.findall("./channel/item"):
+            title = (item.findtext("title", "") or "").strip()
+            link = (item.findtext("link", "") or "").strip()
+            desc = (item.findtext("description", "") or "").strip()
+            if not title or not link:
+                continue
+
+            zim_id = ""
+            path = ""
+            if link.startswith("/content/"):
+                rest = link.split("/content/", 1)[1]
+                parts = rest.split("/", 1)
+                if len(parts) == 2:
+                    zim_id, path = parts[0].strip(), unquote(parts[1].strip())
+                else:
+                    # Best-effort
+                    path = unquote(rest.strip())
+                    zim_id = (zim or "").strip()
+            else:
+                # Unknown shape; treat as path-only within requested ZIM.
+                path = unquote(link)
+                zim_id = (zim or "").strip()
+
+            if not zim_id or not path:
+                continue
+
+            out.append(
+                {
+                    "title": title,
+                    "zim": zim_id,
+                    "path": path,
+                    "snippet": self._clean_ws(desc)[:350],
+                }
+            )
+
+        self._set_cached(cache_key, out)
+        return out
     
     def _rate_limit(self):
         """Apply rate limiting between requests."""
@@ -121,9 +273,8 @@ class KiwixTools:
         """Search ZIM content.
 
         Notes:
-            kiwix-serve endpoints vary by version. The legacy XML `/search` endpoint
-            is not reliably available in current releases; in practice, `/suggest`
-            provides stable, fast lookup for article paths.
+            Prefer the kiwix-serve `/search` RSS endpoint when available.
+            Fall back to `/suggest` if `/search` is unavailable.
 
         Args:
             query: Search query
@@ -149,7 +300,16 @@ class KiwixTools:
         if cached:
             return [SearchResult(**r) for r in cached.get("results", [])]
 
-        # Heuristic: suggest is prefix-oriented; try a few terms.
+        # 1) Try RSS /search endpoint
+        try:
+            rows = self.search_rss(query, zim=zim, count=count, start=start)
+            results = [SearchResult(title=r["title"], url=r["path"], snippet=r.get("snippet", "")) for r in rows]
+            self._set_cached(cache_key, {"results": [r.__dict__ for r in results]})
+            return results
+        except Exception:
+            pass
+
+        # 2) Fallback: suggest (prefix-oriented)
         terms: List[str] = []
         q = query.strip()
         terms.append(q)
@@ -160,36 +320,28 @@ class KiwixTools:
                 terms.extend(parts)
 
         seen_paths: set[str] = set()
-        results: List[SearchResult] = []
-
-        try:
-            for term in terms:
-                try:
-                    suggestions = self.suggest(zim, term, count + start)
-                except (ToolTimeoutError, KiwixToolError):
+        results2: List[SearchResult] = []
+        for term in terms:
+            try:
+                suggestions = self.suggest(zim, term, count + start)
+            except Exception:
+                continue
+            for item in suggestions or []:
+                path = (item.get("path") or "").strip()
+                if not path or path in seen_paths:
                     continue
-
-                for item in suggestions or []:
-                    path = (item.get("path") or "").strip()
-                    if not path or path in seen_paths:
-                        continue
-                    seen_paths.add(path)
-
-                    title = (item.get("value") or "").strip() or (item.get("label") or "").strip()
-                    title = title.replace("<b>", "").replace("</b>", "")
-                    results.append(SearchResult(title=title, url=path, snippet=""))
-
-                    if len(results) >= count + start:
-                        break
-                if len(results) >= count + start:
+                seen_paths.add(path)
+                title = (item.get("value") or "").strip() or (item.get("label") or "").strip()
+                title = title.replace("<b>", "").replace("</b>", "")
+                results2.append(SearchResult(title=title, url=path, snippet=""))
+                if len(results2) >= count + start:
                     break
+            if len(results2) >= count + start:
+                break
 
-            sliced = results[start:start + count]
-            self._set_cached(cache_key, {"results": [r.__dict__ for r in sliced]})
-            return sliced
-
-        except requests.Timeout as e:
-            raise ToolTimeoutError(f"kiwix search timed out: {e}") from e
+        sliced = results2[start:start + count]
+        self._set_cached(cache_key, {"results": [r.__dict__ for r in sliced]})
+        return sliced
     
     def open_raw(self, zim: str, path: str, max_chars: int = 12000) -> Dict[str, Any]:
         """Fetch raw content from ZIM file.
@@ -240,6 +392,7 @@ class KiwixTools:
             result = {
                 "zim": zim,
                 "path": path,
+                "url": url,
                 "content_type": content_type,
                 "content": text,
                 "size": len(text),
