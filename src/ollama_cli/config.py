@@ -7,7 +7,8 @@ from typing import Optional
 
 DEFAULT_BASE_URL = "http://localhost:11434"
 DEFAULT_SEARXNG_URL = "http://localhost:8080/search"
-DEFAULT_KIWIX_URL = "http://127.0.0.1:8080"
+DEFAULT_KIWIX_URL = "http://127.0.0.1:8081"
+DEFAULT_KIWIX_ZIM_DIR = "/mnt/HDD/zims"
 DEFAULT_TIMEOUT = 60
 DEFAULT_CACHE_MINUTES = 30
 DEFAULT_WEB_SEARCH_COUNT = 8
@@ -32,6 +33,7 @@ class ToolConfig:
 
     searxng_url: str = DEFAULT_SEARXNG_URL
     kiwix_url: str = DEFAULT_KIWIX_URL
+    kiwix_zim_dir: str = DEFAULT_KIWIX_ZIM_DIR
     timeout_s: int = DEFAULT_TIMEOUT
     cache_minutes: int = DEFAULT_CACHE_MINUTES
     web_search_count: int = DEFAULT_WEB_SEARCH_COUNT
@@ -100,6 +102,7 @@ def load_config_from_env() -> AppConfig:
 
     searxng_url = os.getenv("SEARXNG_URL", DEFAULT_SEARXNG_URL)
     kiwix_url = os.getenv("KIWIX_URL", DEFAULT_KIWIX_URL)
+    kiwix_zim_dir = os.getenv("KIWIX_ZIM_DIR", DEFAULT_KIWIX_ZIM_DIR)
     cache_minutes = _env_int("OLLAMA_CACHE_MINUTES", DEFAULT_CACHE_MINUTES)
 
     web_search_count = _env_int("OLLAMA_WEB_SEARCH_COUNT", DEFAULT_WEB_SEARCH_COUNT)
@@ -116,6 +119,7 @@ def load_config_from_env() -> AppConfig:
         tools=ToolConfig(
             searxng_url=searxng_url,
             kiwix_url=kiwix_url,
+            kiwix_zim_dir=kiwix_zim_dir,
             timeout_s=timeout_s,
             cache_minutes=cache_minutes,
             web_search_count=web_search_count,

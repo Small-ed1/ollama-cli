@@ -82,6 +82,9 @@ def _configured_tool_specs(tool_config: ToolConfig) -> List[Dict[str, Any]]:
     if "kiwix_open" in specs_map:
         props = specs_map["kiwix_open"]["function"]["parameters"]["properties"]
         props["max_chars"]["default"] = tool_config.kiwix_max_chars
+    if "kiwix_list_zims" in specs_map:
+        props = specs_map["kiwix_list_zims"]["function"]["parameters"]["properties"]
+        props["zim_dir"]["default"] = tool_config.kiwix_zim_dir
 
     return specs
 
@@ -144,7 +147,7 @@ def build_default_registry(tool_config: Optional[ToolConfig] = None) -> ToolRegi
     def kiwix_suggest(zim: str, term: str, count: int = 8) -> str:
         return tool_kiwix_suggest(kiwix_tools, zim, term, count)
 
-    def kiwix_list_zims(zim_dir: str = "/mnt/zim/zims") -> str:
+    def kiwix_list_zims(zim_dir: str = config.kiwix_zim_dir) -> str:
         return tool_kiwix_list_zims(kiwix_tools, zim_dir)
 
     registry.register("kiwix_search", specs_map["kiwix_search"], kiwix_search)

@@ -5,13 +5,21 @@ using text_extract utilities to avoid circular dependencies with WebTools.
 """
 
 import json
+import os
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 import xml.etree.ElementTree as ET
 
 import requests  # type: ignore
 
-from ..config import DEFAULT_KIWIX_URL, DEFAULT_KIWIX_SEARCH_COUNT, DEFAULT_KIWIX_MAX_CHARS
+from ..config import (
+    DEFAULT_KIWIX_MAX_CHARS,
+    DEFAULT_KIWIX_SEARCH_COUNT,
+    DEFAULT_KIWIX_URL,
+    DEFAULT_KIWIX_ZIM_DIR,
+)
 from ..errors import ToolTimeoutError
 from ..text_extract import html_to_text, clean_ws
 from .core import KiwixToolError, SearchResult
@@ -56,7 +64,7 @@ class KiwixTools:
         import hashlib
         return hashlib.md5(key.encode()).hexdigest()
     
-    def _get_cached(self, cache_key: str) -> Optional[Dict[str, Any]]:
+    def _get_cached(self, cache_key: str) -> Optional[Any]:
         """Get cached response if valid."""
         if cache_key in self._cache:
             timestamp, data = self._cache[cache_key]
@@ -66,11 +74,11 @@ class KiwixTools:
                 del self._cache[cache_key]
         return None
     
-    def _set_cached(self, cache_key: str, data: Dict[str, Any]):
+    def _set_cached(self, cache_key: str, data: Any):
         """Cache response with timestamp."""
         self._cache[cache_key] = (time.time(), data)
     
-    def suggest(self, zim: str, term: str, count: int = 8) -> Dict[str, Any]:
+    def suggest(self, zim: str, term: str, count: int = 8) -> List[Dict[str, Any]]:
         """Get suggestions for content completion.
         
         Args:
@@ -79,7 +87,7 @@ class KiwixTools:
             count: Number of suggestions
             
         Returns:
-            Suggestions response from Kiwix
+            List of suggestion items from Kiwix
         """
         self._rate_limit()
         if not zim or not term:
@@ -87,8 +95,8 @@ class KiwixTools:
         
         cache_key = self._cache_key("suggest", {"zim": zim, "term": term, "count": count})
         cached = self._get_cached(cache_key)
-        if cached:
-            return cached
+        if cached is not None:
+            return cached  # type: ignore[return-value]
         
         try:
             response = self.session.get(
@@ -98,6 +106,8 @@ class KiwixTools:
             )
             response.raise_for_status()
             data = response.json()
+            if not isinstance(data, list):
+                raise KiwixToolError("suggest returned unexpected JSON shape")
             self._set_cached(cache_key, data)
             return data
         except requests.Timeout as e:
@@ -108,67 +118,78 @@ class KiwixTools:
             raise KiwixToolError(f"suggest returned invalid JSON: {e}") from e
     
     def search_xml(self, query: str, zim: str, count: int = 8, start: int = 0) -> List[SearchResult]:
-        """Search ZIM content using XML endpoint.
-        
+        """Search ZIM content.
+
+        Notes:
+            kiwix-serve endpoints vary by version. The legacy XML `/search` endpoint
+            is not reliably available in current releases; in practice, `/suggest`
+            provides stable, fast lookup for article paths.
+
         Args:
             query: Search query
-            zim: ZIM file name
+            zim: Kiwix content id (usually ZIM filename without .zim)
             count: Number of results
             start: Start index for pagination
-            
+
         Returns:
-            List of search results
+            List of search results (title + content path)
         """
         self._rate_limit()
         if not query.strip():
             raise KiwixToolError("query cannot be empty")
         if not zim:
             raise KiwixToolError("zim is required")
-        
+
+        # Limit count to reasonable range
+        count = min(max(count, 1), 50)
+        start = max(start, 0)
+
         cache_key = self._cache_key("search", {"query": query, "zim": zim, "count": count, "start": start})
         cached = self._get_cached(cache_key)
         if cached:
             return [SearchResult(**r) for r in cached.get("results", [])]
-        
+
+        # Heuristic: suggest is prefix-oriented; try a few terms.
+        terms: List[str] = []
+        q = query.strip()
+        terms.append(q)
+        if " " in q:
+            parts = [p for p in q.split(" ") if p]
+            if parts:
+                terms.append(parts[-1])
+                terms.extend(parts)
+
+        seen_paths: set[str] = set()
+        results: List[SearchResult] = []
+
         try:
-            response = self.session.get(
-                f"{self.kiwix_url}/search",
-                params={
-                    "pattern": query,
-                    "content": zim,
-                    "format": "xml",
-                    "pageLength": count,
-                    "start": start,
-                },  # type: ignore[arg-type]
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            
-            # Parse XML response
-            root = ET.fromstring(response.text)
-            results = []
-            
-            for item in root.findall(".//item"):
-                title = item.findtext("title", "")
-                url = item.findtext("url", "")
-                snippet = item.findtext("snippet", "")
-                
-                if title and url:
-                    results.append(SearchResult(
-                        title=title,
-                        url=url,
-                        snippet=self._clean_ws(snippet)[:350],
-                    ))
-            
-            self._set_cached(cache_key, {"results": [r.__dict__ for r in results]})
-            return results
-            
+            for term in terms:
+                try:
+                    suggestions = self.suggest(zim, term, count + start)
+                except (ToolTimeoutError, KiwixToolError):
+                    continue
+
+                for item in suggestions or []:
+                    path = (item.get("path") or "").strip()
+                    if not path or path in seen_paths:
+                        continue
+                    seen_paths.add(path)
+
+                    title = (item.get("value") or "").strip() or (item.get("label") or "").strip()
+                    title = title.replace("<b>", "").replace("</b>", "")
+                    results.append(SearchResult(title=title, url=path, snippet=""))
+
+                    if len(results) >= count + start:
+                        break
+                if len(results) >= count + start:
+                    break
+
+            sliced = results[start:start + count]
+            self._set_cached(cache_key, {"results": [r.__dict__ for r in sliced]})
+            return sliced
+
         except requests.Timeout as e:
             raise ToolTimeoutError(f"kiwix search timed out: {e}") from e
-        except requests.RequestException as e:
-            raise KiwixToolError(f"search request failed: {e}") from e
-        except ET.ParseError as e:
-            raise KiwixToolError(f"invalid XML response: {e}") from e
     
     def open_raw(self, zim: str, path: str, max_chars: int = 12000) -> Dict[str, Any]:
         """Fetch raw content from ZIM file.
@@ -191,11 +212,14 @@ class KiwixTools:
             return cached
         
         try:
-            response = self.session.get(
-                f"{self.kiwix_url}/content",
-                params={"content": zim, "url": path},
-                timeout=self.timeout,
-            )
+            # kiwix-serve content paths are served as:
+            #   /content/<content-id>/<article-path>
+            # The old /content?content=...&url=... endpoint is not supported
+            # by current kiwix-serve releases.
+            safe_zim = quote(zim, safe="-._~")
+            safe_path = quote(path.lstrip("/"), safe="/-._~")
+            url = f"{self.kiwix_url}/content/{safe_zim}/{safe_path}"
+            response = self.session.get(url, timeout=self.timeout)
             response.raise_for_status()
             
             # Get content and metadata
@@ -230,21 +254,68 @@ class KiwixTools:
         except requests.RequestException as e:
             raise KiwixToolError(f"open request failed: {e}") from e
     
-    def list_zims(self, zim_dir: str = "/mnt/zim/zims") -> List[Dict[str, Any]]:
-        """List available ZIM files.
-        
+    def list_zims(self, zim_dir: str) -> List[Dict[str, Any]]:
+        """List available ZIM files from a directory.
+
+        This does not require kiwix-serve to be running.
+
         Args:
-            zim_dir: Directory containing ZIM files
-            
+            zim_dir: Directory containing ZIM files (and optionally library.xml)
+
         Returns:
-            List of ZIM file information
+            List of ZIM file information.
         """
-        # Note: This is a placeholder implementation
-        # In a real scenario, you'd scan the directory or query kiwix-serve
-        return [
-            {"name": "wikipedia_en_all_maxi_2024-10", "title": "English Wikipedia", "size": "90GB"},
-            {"name": "stackexchange_en_all", "title": "Stack Exchange", "size": "30GB"},
-        ]
+        if not zim_dir:
+            raise KiwixToolError("zim_dir is required")
+
+        p = Path(zim_dir)
+        if not p.exists() or not p.is_dir():
+            raise KiwixToolError(f"zim_dir not found or not a directory: {zim_dir}")
+
+        lib_meta: Dict[str, Dict[str, Any]] = {}
+        lib_path = p / "library.xml"
+        if lib_path.exists() and lib_path.is_file():
+            try:
+                root = ET.parse(str(lib_path)).getroot()
+                for book in root.findall("book"):
+                    path_attr = (book.get("path") or "").strip()
+                    if not path_attr:
+                        continue
+                    file_name = os.path.basename(path_attr)
+                    lib_meta[file_name] = {
+                        "title": (book.get("title") or "").strip(),
+                        "description": (book.get("description") or "").strip(),
+                        "language": (book.get("language") or "").strip(),
+                        "creator": (book.get("creator") or "").strip(),
+                        "publisher": (book.get("publisher") or "").strip(),
+                        "tags": (book.get("tags") or "").strip(),
+                        "article_count": _safe_int(book.get("articleCount")),
+                        "zim_size_kib": _safe_int(book.get("size")),
+                    }
+            except Exception:
+                # Best-effort enrichment only; listing should still work.
+                lib_meta = {}
+
+        results: List[Dict[str, Any]] = []
+        for zim_file in sorted(p.glob("*.zim"), key=lambda x: x.name.lower()):
+            stat = zim_file.stat()
+            zim_id = zim_file.stem
+
+            entry: Dict[str, Any] = {
+                "zim_id": zim_id,
+                "file_name": zim_file.name,
+                "path": str(zim_file),
+                "size_bytes": stat.st_size,
+                "mtime_s": int(stat.st_mtime),
+            }
+
+            meta = lib_meta.get(zim_file.name)
+            if meta:
+                entry.update({k: v for k, v in meta.items() if v not in (None, "")})
+
+            results.append(entry)
+
+        return results
     
     def _clean_ws(self, s: str) -> str:
         """Clean whitespace (alias for text_extract.clean_ws)."""
@@ -322,12 +393,12 @@ def tool_kiwix_suggest(kiwix_tools: KiwixTools, zim: str, term: str, count: int 
     return json.dumps(result, indent=2, ensure_ascii=False)
 
 
-def tool_kiwix_list_zims(kiwix_tools: KiwixTools, zim_dir: str = "/mnt/zim/zims") -> str:
+def tool_kiwix_list_zims(kiwix_tools: KiwixTools, zim_dir: str = DEFAULT_KIWIX_ZIM_DIR) -> str:
     """Tool wrapper for listing ZIM files.
     
     Args:
         kiwix_tools: KiwixTools instance
-        zim_dir: Directory containing ZIM files (default '/mnt/zim/zims')
+        zim_dir: Directory containing ZIM files (default '/mnt/HDD/zims')
         
     Returns:
         JSON string with ZIM file list
@@ -342,3 +413,15 @@ def tool_kiwix_list_zims(kiwix_tools: KiwixTools, zim_dir: str = "/mnt/zim/zims"
         indent=2,
         ensure_ascii=False,
     )
+
+
+def _safe_int(v: Optional[str]) -> Optional[int]:
+    if v is None:
+        return None
+    v = v.strip()
+    if not v:
+        return None
+    try:
+        return int(v)
+    except ValueError:
+        return None

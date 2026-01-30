@@ -126,7 +126,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "required": ["query", "zim"],
             "properties": {
                 "query": {"type": "string", "description": "Search query"},
-                "zim": {"type": "string", "description": "ZIM file name"},
+                "zim": {
+                    "type": "string",
+                    "description": "Kiwix content id (usually the ZIM filename without .zim)",
+                },
                 "count": {
                     "type": "integer",
                     "description": "Number of results (default 8)",
@@ -147,7 +150,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "type": "object",
             "required": ["zim", "path"],
             "properties": {
-                "zim": {"type": "string", "description": "ZIM file name"},
+                "zim": {
+                    "type": "string",
+                    "description": "Kiwix content id (usually the ZIM filename without .zim)",
+                },
                 "path": {"type": "string", "description": "Content path within ZIM"},
                 "max_chars": {
                     "type": "integer",
@@ -164,7 +170,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "type": "object",
             "required": ["zim", "term"],
             "properties": {
-                "zim": {"type": "string", "description": "ZIM file name"},
+                "zim": {
+                    "type": "string",
+                    "description": "Kiwix content id (usually the ZIM filename without .zim)",
+                },
                 "term": {"type": "string", "description": "Term to complete"},
                 "count": {
                     "type": "integer",
@@ -182,8 +191,8 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "properties": {
                 "zim_dir": {
                     "type": "string",
-                    "description": "ZIM directory path (default '/mnt/zim/zims')",
-                    "default": "/mnt/zim/zims",
+                    "description": "ZIM directory path (default '/mnt/HDD/zims')",
+                    "default": "/mnt/HDD/zims",
                 },
             },
         },

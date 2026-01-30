@@ -69,7 +69,8 @@ Environment variables:
 - `OLLAMA_API_KEY` (optional; sent as `Authorization: Bearer ...`)
 - `OLLAMA_MODEL` (used as a default model in some flows)
 - `SEARXNG_URL` (default: `http://localhost:8080/search`)
-- `KIWIX_URL` (default: `http://127.0.0.1:8080`)
+- `KIWIX_URL` (default: `http://127.0.0.1:8081`)
+- `KIWIX_ZIM_DIR` (default: `/mnt/HDD/zims`)
 
 Interactive configuration:
 - Running `ollama-cli` with no arguments starts interactive setup on first run.
@@ -116,7 +117,11 @@ File access safety:
 ## Web + offline backends
 
 - SearxNG: required for `web_search` (and used by `research` when you do not pass `--url`). See `docs/SEARXNG_SETUP.md`.
-- Kiwix: required for `kiwix_*` tools. Run `kiwix-serve` and set `KIWIX_URL`.
+- Kiwix: required for `kiwix_*` tools. See `docs/KIWIX_SETUP.md`.
+  - Run `kiwix-serve` pointing at your ZIMs (example):
+    - `kiwix-serve --port 8081 --library /mnt/HDD/zims/library.xml`
+  - Then set `KIWIX_URL=http://127.0.0.1:8081`.
+  - For most setups, the tool's `zim` parameter is the ZIM filename without the `.zim` suffix (e.g. `python.zim` -> `python`).
 
 ## Development
 
