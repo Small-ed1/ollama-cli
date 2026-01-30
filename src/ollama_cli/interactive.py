@@ -14,6 +14,53 @@ from .client import OllamaClient
 from .config import DEFAULT_BASE_URL, load_config_from_env, resolve_config_file
 
 
+def _coerce_optional_str(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        s = value.strip()
+        return s if s else None
+    s = str(value).strip()
+    return s if s else None
+
+
+def _coerce_str_list(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    out: List[str] = []
+    for item in value:
+        if isinstance(item, str):
+            s = item.strip()
+            if s:
+                out.append(s)
+    return out
+
+
+def _coerce_optional_str_list(value: Any) -> Optional[List[str]]:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        return None
+    return _coerce_str_list(value)
+
+
+def _coerce_optional_float(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _coerce_optional_thinking(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    s = value.strip().lower()
+    if s in {"low", "medium", "high", "true", "false"}:
+        return s
+    return None
+
+
 def _print_advanced_help() -> None:
     print("\nCommands:")
     print("  help                     Show this help")
@@ -329,13 +376,15 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
         config = config_override
     else:
         config = load_configuration() or {}
-    current_model = config.get("model")
-    current_tools = config.get("tools", [])
-    current_system = config.get("system")
-    current_temperature = config.get("temperature")
-    current_think = config.get("thinking")
-    current_allowed_read_paths = config.get("allowed_read_paths")
-    current_unsafe_read = config.get("unsafe_read", False)
+    current_model: Optional[str] = _coerce_optional_str(config.get("model"))
+    current_tools: List[str] = _coerce_str_list(config.get("tools"))
+    current_system: Optional[str] = _coerce_optional_str(config.get("system"))
+    current_temperature: Optional[float] = _coerce_optional_float(config.get("temperature"))
+    current_think: Optional[str] = _coerce_optional_thinking(config.get("thinking"))
+    current_allowed_read_paths: Optional[List[str]] = _coerce_optional_str_list(
+        config.get("allowed_read_paths")
+    )
+    current_unsafe_read: bool = bool(config.get("unsafe_read", False))
 
     print("ollama-cli interactive (advanced)")
     if current_model:
@@ -369,11 +418,12 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
     pending_line = menu_to_command.get(first_choice)
 
     while True:
+        line: Optional[str]
         if pending_line is not None:
             line = pending_line
             pending_line = None
         else:
-            line = _safe_input("ollama> ")  # type: ignore[assignment]
+            line = _safe_input("ollama> ")
         if line is None:
             print("\nGoodbye!")
             return
@@ -409,13 +459,13 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
             if new_cfg.get("save"):
                 save_configuration(new_cfg)
             config = new_cfg
-            current_model = config.get("model")
-            current_tools = config.get("tools", [])
-            current_system = config.get("system")
-            current_temperature = config.get("temperature")
-            current_think = config.get("thinking")
-            current_allowed_read_paths = config.get("allowed_read_paths")
-            current_unsafe_read = config.get("unsafe_read", False)
+            current_model = _coerce_optional_str(config.get("model"))
+            current_tools = _coerce_str_list(config.get("tools"))
+            current_system = _coerce_optional_str(config.get("system"))
+            current_temperature = _coerce_optional_float(config.get("temperature"))
+            current_think = _coerce_optional_thinking(config.get("thinking"))
+            current_allowed_read_paths = _coerce_optional_str_list(config.get("allowed_read_paths"))
+            current_unsafe_read = bool(config.get("unsafe_read", False))
             continue
 
         parts = line.split()
@@ -430,47 +480,47 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
             continue
 
         if cmd == "pull":
-            model = rest[0] if rest else ""
-            if not model:
-                model = (_safe_input("Model (name:tag): ") or "").strip()
-            model = (model or "").strip()
-            if not model:
+            pull_model = rest[0] if rest else ""
+            if not pull_model:
+                pull_model = (_safe_input("Model (name:tag): ") or "").strip()
+            pull_model = (pull_model or "").strip()
+            if not pull_model:
                 continue
             try:
-                cmd_pull(argparse.Namespace(host=base_url, model=model))
+                cmd_pull(argparse.Namespace(host=base_url, model=pull_model))
             except SystemExit:
                 pass
             continue
 
         if cmd == "gen":
-            model: Optional[str] = None  # type: ignore[assignment]
+            gen_model: Optional[str] = None
             prompt = ""
             if rest:
                 if len(rest) >= 2:
-                    model = rest[0]
+                    gen_model = rest[0]
                     prompt = " ".join(rest[1:]).strip()
                 else:
                     prompt = " ".join(rest).strip()
 
             if not prompt:
-                prompt_input = _safe_input("Prompt: ")  # type: ignore[assignment]
+                prompt_input = _safe_input("Prompt: ")
                 prompt = (prompt_input or "").strip()
             if not prompt:
                 continue
 
-            if not model or model == "-":
-                model = current_model
-            if not model:
+            if not gen_model or gen_model == "-":
+                gen_model = current_model
+            if not gen_model:
                 picked = _pick_model_interactively(client, current_model)
                 if not picked:
                     continue
-                model = picked
+                gen_model = picked
 
             try:
                 cmd_gen(
                     argparse.Namespace(
                         host=base_url,
-                        model=model if isinstance(model, str) else str(model or ""),
+                        model=str(gen_model),
                         prompt=prompt,
                         stream=False,
                         think=current_think,
@@ -481,16 +531,16 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
             continue
 
         if cmd == "chat":
-            model = rest[0] if rest else current_model
-            if not model:
+            chat_model: Optional[str] = rest[0] if rest else current_model
+            if not chat_model:
                 picked = _pick_model_interactively(client, current_model)
                 if not picked:
                     continue
-                model = picked
+                chat_model = picked
 
             args = argparse.Namespace(
                 host=base_url,
-                model=(model if isinstance(model, str) else str(model or "")),
+                model=str(chat_model),
                 system=current_system,
                 tools_list=current_tools,
                 tools=False,
@@ -515,12 +565,12 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
             if not query:
                 continue
 
-            model = current_model
-            if not model:
+            research_model = current_model
+            if not research_model:
                 picked = _pick_model_interactively(client, current_model)
                 if not picked:
                     continue
-                model = picked
+                research_model = picked
 
             preset_idx = get_user_choice("Research depth:", ["quick", "standard", "deep"], default=1)
             preset = ["quick", "standard", "deep"][preset_idx]
@@ -528,7 +578,7 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
             try:
                 out = run_deep_research(
                     client=client,
-                    model=model,
+                    model=research_model,
                     query=query,
                     preset_name=preset,
                     seed_urls=None,
@@ -544,7 +594,7 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
                 try:
                     out = run_deep_research(
                         client=client,
-                        model=model,
+                        model=research_model,
                         query=query,
                         preset_name=preset,
                         seed_urls=seed_urls,
@@ -564,12 +614,12 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
         if route == 2:
             continue
 
-        model = current_model
-        if not model:
+        fallback_model = current_model
+        if not fallback_model:
             picked = _pick_model_interactively(client, current_model)
             if not picked:
                 continue
-            model = picked
+            fallback_model = picked
 
         if route == 1:
             preset_idx = get_user_choice("Research depth:", ["quick", "standard", "deep"], default=1)
@@ -577,7 +627,7 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
             try:
                 out = run_deep_research(
                     client=client,
-                    model=model,
+                    model=fallback_model,
                     query=line,
                     preset_name=preset,
                     seed_urls=None,
@@ -603,7 +653,7 @@ def start_interactive(config_override: Optional[Dict[str, Any]] = None) -> None:
 
         try:
             resp: Dict[str, Any] = {}
-            for chunk in client.chat(one_shot_messages, model, stream=False, options=options):
+            for chunk in client.chat(one_shot_messages, str(fallback_model), stream=False, options=options):
                 resp = chunk
             msg = (resp.get("message", {}) or {}).get("content") or ""
             print("\n" + msg.strip() + "\n")

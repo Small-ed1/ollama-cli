@@ -14,7 +14,7 @@ authors = [{name = "Author", email = "author@example.com"}]
 [project.optional-dependencies]
 web = ["trafilatura", "beautifulsoup4", "readability-lxml"]
 kiwix = []
-dev = ["pytest", "pytest-asyncio", "mypy", "build"]
+dev = ["pytest", "pytest-asyncio", "mypy", "build", "types-requests"]
 
 [project.scripts]
 ollama-cli = "ollama_cli.cli:main"

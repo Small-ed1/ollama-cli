@@ -17,6 +17,7 @@ from .tool_contract import ToolErrorCodes, ToolResult
 from .tools.registry import ToolRegistry, build_default_registry
 
 logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 
 class ToolRuntime:

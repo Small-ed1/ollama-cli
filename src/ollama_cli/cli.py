@@ -7,6 +7,7 @@ content access via Kiwix.
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -278,6 +279,32 @@ def cmd_chat(args: argparse.Namespace) -> None:
             messages.append({"role": "system", "content": args.system})
         
         print("Starting chat (Ctrl+D to exit)")
+
+        tool_output_mode = getattr(args, "tool_output", "summary")
+        debug_tools = bool(getattr(args, "debug_tools", False))
+
+        def _print_tool_result(tool_msg: Dict[str, Any]) -> None:
+            tool_name = str(tool_msg.get("tool_name") or "")
+            content = tool_msg.get("content")
+            if not isinstance(content, str):
+                content = str(content or "")
+
+            if tool_output_mode == "raw":
+                print(f"Tool result ({tool_name}): {content}")
+                return
+
+            try:
+                data = json.loads(content)
+            except Exception:
+                print(f"Tool result ({tool_name}): <unparseable>")
+                return
+
+            ok = bool(data.get("ok"))
+            if ok:
+                print(f"Tool ok: {tool_name}")
+            else:
+                err = data.get("error")
+                print(f"Tool error: {tool_name}: {err}")
         
         while True:
             try:
@@ -320,12 +347,22 @@ def cmd_chat(args: argparse.Namespace) -> None:
                 
                 # Execute tools if any were called
                 if tool_calls and tools:
+                    if debug_tools:
+                        for tc in tool_calls:
+                            fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+                            name = fn.get("name")
+                            arguments = fn.get("arguments")
+                            print(f"Tool call: {name} args={arguments}")
+
                     tool_results = run_tool_calling_loop_sync(
                         tool_calls,
                         tool_context=file_security,
                         runtime=runtime,
                     )
-                    
+
+                    for tool_msg in tool_results:
+                        _print_tool_result(tool_msg)
+                     
                     # Add tool results to conversation
                     for result in tool_results:
                         messages.append(result)

@@ -1,5 +1,6 @@
 """Text extraction utilities - zero tool knowledge."""
 
+import importlib
 import logging
 from typing import Any
 
@@ -17,21 +18,19 @@ def ensure_web_deps() -> bool:
     if _web_deps_installed:
         return True
     
-    # Check if dependencies are available by importing actual modules
+    # Check if dependencies are available by importing actual modules.
+    # Use importlib to keep optional deps optional for type-checking.
     missing = []
-    # Local optional dependency modules (set to None if unavailable)
-    # Optional dependency modules will be bound by the import statements below
     try:
-        import trafilatura as _trafilatura_mod  # type: ignore[import-not-found]
+        _trafilatura_mod = importlib.import_module("trafilatura")
     except ImportError:
-        _trafilatura_mod = None  # type: ignore
-        missing.append('trafilatura')
+        _trafilatura_mod = None
+        missing.append("trafilatura")
     try:
-        import bs4 as _bs4_mod  # type: ignore[import-not-found]
-        
+        _bs4_mod = importlib.import_module("bs4")
     except ImportError:
-        _bs4_mod = None  # type: ignore
-        missing.append('beautifulsoup4')  # Package name, not import name
+        _bs4_mod = None
+        missing.append("beautifulsoup4")  # Package name, not import name
 
     if missing:
         logger.info(
@@ -40,7 +39,6 @@ def ensure_web_deps() -> bool:
         )
         return False
     # Bind the loaded modules to the module globals for runtime use
-    global _trafilatura, _beautifulsoup
     _trafilatura = _trafilatura_mod
     _beautifulsoup = _bs4_mod
     _web_deps_installed = True
@@ -73,9 +71,12 @@ def html_to_text(html: str) -> str:
     
     # Fallback to BeautifulSoup
     try:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html, "html.parser")
-        return clean_ws(soup.get_text(" "))
+        if _beautifulsoup:
+            BeautifulSoup = getattr(_beautifulsoup, "BeautifulSoup", None)
+            if BeautifulSoup:
+                soup = BeautifulSoup(html, "html.parser")
+                return clean_ws(soup.get_text(" "))
+        return clean_ws(html)
     except Exception:
         return clean_ws(html)
 
